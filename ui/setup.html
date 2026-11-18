@@ -30,12 +30,13 @@
   <section class="tech-card rv" style="--d:4">
     <p class="card-hint" style="margin-bottom:6px">
       She thinks through four AI roles: <b>surface</b> answers instantly, <b>deep</b> is her real voice,
-      <b>reflection</b> coaches between turns, <b>memory writer</b> remembers. By default all of them run on your OpenRouter key (recommended); a local Ollama model can take any of them below.
+      <b>reflection</b> coaches between turns, <b>memory writer</b> remembers. By default all of them run on your OpenRouter key (recommended); a local Ollama model, or any server that speaks the OpenAI API, can take any of them below.
     </p>
     <div class="model-summary" id="modelSummary"><span class="card-hint">Loading current models…</span></div>
     <div class="prov-switch" id="provSwitch" style="margin:12px 0;">
       <button type="button" class="prov" id="provOpenrouter" data-prov="openrouter"><b>OpenRouter</b><span>recommended · her tested models · a few dollars a month</span></button>
       <button type="button" class="prov" id="provOllama" data-prov="ollama"><b>Ollama</b><span>fully local · a 27B+ model · a 32 GB GPU or a second PC</span></button>
+      <button type="button" class="prov" id="provCustom" data-prov="custom"><b>Custom</b><span>any OpenAI-compatible server · LM Studio, vLLM, llama.cpp, Groq…</span></button>
     </div>
     <p class="card-hint" id="modelBusyNote" hidden style="margin:0 0 12px;"></p>
     <div id="orPanel">
@@ -46,7 +47,7 @@
         <span class="card-hint" id="orKeyStatus">checking…</span>
       </div>
       <p class="card-hint" data-simple>Get a key at openrouter.ai → Keys. That's the only account OpenAmika needs, and in almost all cases the better choice: her tested models, for a few dollars a month. OpenRouter is prepaid: add a few dollars of credit first (openrouter.ai/settings/credits); a chat costs about $0.002.</p>
-      <p class="card-hint" id="orBackNote" hidden>She is on Ollama right now. <button class="editorial-link" id="orBack">Switch back to the OpenRouter preset →</button></p>
+      <p class="card-hint" id="orBackNote" hidden><span id="orBackText">She is on Ollama right now.</span> <button class="editorial-link" id="orBack">Switch back to the OpenRouter preset →</button></p>
       <p class="card-hint" id="orGoneNote" hidden style="color:var(--err)"><span id="orGoneText"></span> <button class="editorial-link" id="orGoneBack">Switch back to the OpenRouter preset →</button></p>
     </div>
     <div id="ollamaPanel" hidden>
@@ -80,6 +81,33 @@
         Her memory search already runs locally — with Ollama, nothing leaves your computer. In
         <b>Professional</b> mode you can mix: a local model for some roles, OpenRouter for others.
       </p>
+    </div>
+    <div id="customPanel" hidden>
+      <div id="cuList"><p class="card-hint">checking…</p></div>
+      <details class="oa-details" id="cuAdd">
+        <summary>Add an endpoint</summary>
+        <div class="inner">
+          <div class="form-row" style="margin-bottom:8px;">
+            <div class="field"><label>Name</label>
+              <input type="text" id="cuName" maxlength="60" placeholder="e.g. LM Studio" autocomplete="off"></div>
+            <div class="field" style="flex:2"><label>Address</label>
+              <input type="text" id="cuUrl" placeholder="http://127.0.0.1:1234/v1" autocomplete="off"></div>
+          </div>
+          <div class="form-row">
+            <div class="field" style="flex:2"><label>Key (optional)</label>
+              <input type="password" id="cuKey" placeholder="only if the server asks for one" autocomplete="off"></div>
+            <div class="field"><label>JSON mode</label><select id="cuJson"></select></div>
+            <button class="btn small primary" id="cuSave">Save</button>
+          </div>
+        </div>
+      </details>
+      <p class="card-hint" id="cuCtxHint">
+        Her prompts take about 8k tokens plus the answer. Give the model a context window of 16k or more on the server:
+        LM Studio, <b>Context Length</b> when you load it; llama.cpp, <code>-c 16384</code>; vLLM,
+        <code style="white-space:nowrap">--max-model-len 16384</code>. Cloud APIs need nothing.
+      </p>
+      <p class="card-hint">JSON mode is how the memory writer asks for JSON: <code>json_object</code> for most servers, <code>json_schema</code> for LM Studio, <code>none</code> if the server refuses both.</p>
+      <p class="card-hint">Her cost meter does not track custom endpoints: their calls count tokens at $0.</p>
     </div>
     <div data-pro>
       <div class="form-row" style="margin:14px 0;">

@@ -521,8 +521,10 @@ def install_custom(g):
                 discover(g["http_requests"], endpoint["base_url"], os.environ.get(key_name(endpoint["id"])),
                          timeout=(2, 3))
                 out["reachable"] = True
-            except Exception as error:
-                out["reachable"], out["error"] = False, str(error)[:160]
+            except OpenRouterError as error:
+                out["reachable"], out["error"] = False, str(error)[:160]     # it answered: a refused key, a redirect…
+            except Exception:
+                out["reachable"] = False        # nothing answered; the page says so with the address
         return out
 
     def status(probe=True):

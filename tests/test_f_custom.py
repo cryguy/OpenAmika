@@ -526,8 +526,12 @@ class RoleManagerTests(unittest.TestCase):
         # the page's status probe: up or down, never an error page
         http.responses = [ConnectionError("refused")]
         result, status = self.call("/api/build_f/custom")
-        self.assertEqual((status, result["endpoints"][0]["reachable"]), (200, False))
+        self.assertEqual((status, result["endpoints"][0]["reachable"], result["endpoints"][0]["error"]), (200, False, None))
         self.assertEqual(http.calls[-1][1]["timeout"], (2, 3))
+        http.responses = [Response(status=401)]
+        result, _ = self.call("/api/build_f/custom")
+        self.assertFalse(result["endpoints"][0]["reachable"])
+        self.assertIn("refused the key", result["endpoints"][0]["error"])
 
 
 if __name__ == "__main__":

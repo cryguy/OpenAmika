@@ -214,14 +214,16 @@
       if (memory.degraded) add("warn", "Memory", "running degraded — see Setup → System health");
       else add("ok", "Memory", (memory.events != null ? memory.events + " conversations" : "ready"));
     } catch (error) { add("err", "Brain", "not answering — is the brain running? (launch.py)"); }
-    // her brain's provider per role: a cloud role needs the OpenRouter key; a local role needs Ollama up
-    let usesCloud = true, usesOllama = false, localModels = [];
+    // her brain's provider per role: a cloud role needs the OpenRouter key; a local role needs Ollama up; a custom role
+    // needs its endpoint up
+    let usesCloud = true, usesOllama = false, usesCustom = false, localModels = [];
     try {
       const m = await getJSON("/api/build_f/models");
       const roles = ["surface", "deep", "reflection", "memory_write"];
       const kinds = roles.map((role) => { const item = ((m.options || {})[role] || []).find((o) => o.key === (m.selections || {})[role]); return item ? item.transport : "openrouter"; });
       usesCloud = kinds.includes("openrouter");
       usesOllama = kinds.includes("ollama");
+      usesCustom = kinds.includes("custom");
       localModels = roles.filter((_, i) => kinds[i] === "ollama").map((role) => { const item = (m.options[role] || []).find((o) => o.key === m.selections[role]); return item ? item.model : ""; });
     } catch (_) {}
     if (usesCloud) {
@@ -229,7 +231,7 @@
         const k = await getJSON("/api/build_f/openrouter_key?credits=1");
         const b = keyBalance(k);
         add(k.present ? b.level : "err", "OpenRouter key", k.present ? "saved " + (k.hint || "") + (b.text ? " · " + b.text : "")
-                                                             : "no key saved — Setup → Brain (or switch to Ollama)");
+                                                             : "no key saved — Setup → Brain (or switch to Ollama or Custom)");
       } catch (_) { /* the brain row already says it is down */ }
       // a chosen model that OpenRouter no longer offers makes every reply fail
       try {
@@ -249,6 +251,18 @@
         else if (missing.length) add("warn", "Ollama (local brain)", "model(s) no longer detected: " + missing.join(", ") + " — Setup → Brain → Detect");
         else add("ok", "Ollama (local brain)", (o.live_version ? "v" + o.live_version + " · " : "") + Array.from(new Set(localModels)).join(", "));
       } catch (_) { add("err", "Ollama (local brain)", "status unavailable"); }
+    }
+    if (usesCustom) {
+      try {
+        const c = await getJSON("/api/build_f/custom");
+        const inUse = Object.values(c.in_use || {});
+        for (const e of (c.endpoints || [])) {
+          const models = Array.from(new Set(inUse.filter((u) => u.endpoint === e.id).map((u) => u.model)));
+          if (!models.length) continue;
+          if (e.reachable === false) add("err", "Custom: " + e.name, e.error || "not answering at " + e.base_url);
+          else add("ok", "Custom: " + e.name, models.join(", "));
+        }
+      } catch (_) { add("err", "Custom endpoints", "status unavailable"); }
     }
     // speech / STT
     try {
