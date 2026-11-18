@@ -16,7 +16,9 @@ are listed with their reason but can never be selected; a saved selection that n
 one falls back, role by role, to the fallback preset (``fallback_preset`` or the first
 preset whose choices are all enabled). Presets may name a ``provider``;
 ``apply_preset`` (POST /api/build_f/preset) switches all four roles at once, which is
-the OpenRouter <-> Alibaba provider switch.
+the OpenRouter <-> Alibaba provider switch. Ollama and custom (any OpenAI-compatible
+server, f_custom) options are not rows: they are generated per model and role from
+config/ollama.json and config/custom_llm.json, zero-priced.
 """
 from __future__ import annotations
 
@@ -28,12 +30,14 @@ import os
 from pathlib import Path
 import re
 import threading
+from urllib.parse import urlsplit
 
 from f_extract import SYSTEM, FACT_INSTRUCTION, parse_isolated_facts
 from f_memory import _write
 from f_openrouter import (ALIBABA, AlibabaClient, OpenRouterClient, alibaba_base_url, alibaba_role_config,
                           embedding_config, load_alibaba_catalog, load_catalog, role_config)
 from f_ollama import OLLAMA, THINKING_ROLES, OllamaClient, load_ollama_config, ollama_role_config
+from f_custom import CUSTOM, CustomClient, custom_role_config, key_name, load_custom_config
 
 ROLES = ("surface", "deep", "reflection", "memory_write")
 NATIVE_KEYS = {"surface": "grok-4.3-fast", "deep": "claude-5-sonnet",
@@ -41,9 +45,10 @@ NATIVE_KEYS = {"surface": "grok-4.3-fast", "deep": "claude-5-sonnet",
 DEFAULT_NAMES = {"surface": "DEFAULT_SURFACE_MODEL", "deep": "DEFAULT_DEEP_MODEL",
                  "reflection": "DEFAULT_THINKING_MODEL"}
 LIST_NAMES = {"surface": "SURFACE_MODEL_KEYS", "deep": "DEEP_MODEL_KEYS", "reflection": "THINKING_MODEL_KEYS"}
-# Role transports (option "provider"); a row without one is OpenRouter. Ollama options are not rows of
-# llm_roles.json: they are generated from config/ollama.json (whatever the local server has pulled).
-PROVIDERS = ("openrouter", ALIBABA, OLLAMA)
+# Role transports (option "provider"); a row without one is OpenRouter. Ollama and custom options are not rows of
+# llm_roles.json: they are generated from config/ollama.json (whatever the local server has pulled) and
+# config/custom_llm.json (the OpenAI-compatible endpoints added on the Setup page).
+PROVIDERS = ("openrouter", ALIBABA, OLLAMA, CUSTOM)
 # The native memory writer is not an AVAILABLE_MODELS entry; its provider is fixed.
 NATIVE_PROVIDERS = {"claude-sonnet-5": "anthropic"}
 # webui's legacy per-layer model routes (Flask endpoint names) and its model list.
@@ -73,6 +78,8 @@ class RoleManager:
         self.alibaba = None
         # The local server's detected models (config/ollama.json; empty until the Setup page detects them).
         self.ollama = load_ollama_config(self.root)
+        # The OpenAI-compatible endpoints and their models (config/custom_llm.json; empty until some are added).
+        self.custom = load_custom_config(self.root)
         self.lock = threading.RLock()
         self.options = {}
         self.native_extract = memory.extract_fn
@@ -101,6 +108,7 @@ class RoleManager:
                 raise ValueError("Each role requires at least one enabled option")
             self.options[role] = choices
         self._ollama_options()
+        self._custom_options()
         self.selection_fallback = {}
         self.selections = self._initial(self.document.get("selections"))
         self.embedding = None
@@ -213,7 +221,58 @@ class RoleManager:
             self._apply(selections)
             return self.get()
 
+    def _custom_options(self):
+        """One option per custom endpoint, chat model and role ("<role>:custom:<endpoint>:<model>"), zero-priced."""
+        for role in ROLES:
+            for endpoint in self.custom["endpoints"]:
+                host = urlsplit(endpoint["base_url"]).netloc
+                for model in endpoint["models"]:
+                    if model["kind"] != "chat":
+                        continue
+                    key = f"{role}:custom:{endpoint['id']}:{model['name']}"
+                    if key in self.options[role]:
+                        continue
+                    row = {"key": key, "name": f"{model['name']} ({endpoint['name']})",
+                           "description": f"Runs on the OpenAI-compatible server at {host}; its cost is not tracked.",
+                           "provider": CUSTOM, "endpoint_id": endpoint["id"], "model_id": model["name"]}
+                    try:
+                        self.options[role][key] = self._option(role, key, row)
+                    except ValueError:
+                        continue        # a model that cannot serve this role is simply not offered
+
+    def reload_custom(self):
+        """Re-read config/custom_llm.json (after an endpoint, model or detect change) and swap the custom options; a
+        selected model that vanished falls back to the fallback preset's choice for that role."""
+        with self.lock:
+            self.custom = load_custom_config(self.root)
+            for role in ROLES:
+                for key in [k for k, v in self.options[role].items() if v.get("transport") == CUSTOM]:
+                    del self.options[role][key]
+                    self._registrations.pop(key, None)
+                    self.g["AVAILABLE_MODELS"].pop(key, None)
+            self._custom_options()
+            self.g["AVAILABLE_MODELS"].update(self._registrations)
+            selections = copy.deepcopy(self.selections)
+            moved = False
+            for role in ROLES:
+                if selections[role] in self.options[role]:
+                    continue
+                preset = self._fallback_preset()
+                selections[role] = (preset["selections"][role] if preset else
+                                    next(k for k, item in self.options[role].items() if not item.get("disabled")))
+                moved = True
+            if moved:
+                document = copy.deepcopy(self.document)
+                document["selections"] = selections
+                _write(self.path, document)
+                self.document = document
+            self._apply(selections)
+            return self.get()
+
     def _config(self, role, transport, row):
+        if transport == CUSTOM:
+            return custom_role_config(self.custom, row.get("endpoint_id"), row.get("model_id"), role,
+                                      max_tokens=row.get("max_tokens"))
         if transport == OLLAMA:
             return ollama_role_config(self.ollama, row.get("model_id"), role,
                                       reasoning_enabled=row.get("reasoning_enabled"), max_tokens=row.get("max_tokens"))
@@ -236,6 +295,11 @@ class RoleManager:
         if config.get("transport") == OLLAMA:
             # Local: nothing is charged. A priced (zero) entry keeps the meter's budget gate satisfied.
             self.meter.pricing["models"]["ollama:" + config["model_id"]] = {"input": 0.0, "output": 0.0, "cache_read": 0.0}
+            return
+        if config.get("transport") == CUSTOM:
+            # Not tracked (nothing for a local server, unknown for a paid one). A priced (zero) entry keeps the
+            # meter's budget gate satisfied.
+            self.meter.pricing["models"]["custom:" + config["model_id"]] = {"input": 0.0, "output": 0.0, "cache_read": 0.0}
             return
         if config.get("transport") == ALIBABA:
             # Model Studio calls are priced by the transport from the reviewed list price and
@@ -364,6 +428,10 @@ class RoleManager:
                     "ollama": {"base_url": self.ollama["base_url"], "num_ctx": self.ollama["num_ctx"],
                                "detected_at": self.ollama.get("detected_at"), "version": self.ollama.get("version"),
                                "models": [m["name"] for m in self.ollama["models"]]},
+                    "custom": {"endpoints": [{"id": e["id"], "name": e["name"], "base_url": e["base_url"],
+                                              "json_mode": e["json_mode"],
+                                              "models": [m["name"] for m in e["models"] if m["kind"] == "chat"]}
+                                             for e in self.custom["endpoints"]]},
                     "embedding": "OpenRouter Gemini embedding 2" if self.embedding else "Gemini embedding 2"}
 
     def _requests_in_flight(self):
@@ -449,7 +517,8 @@ def install_roles(g, root, memory, meter, scope, local, pricing):
     g["F_DISABLED_PROVIDERS"] = dict(manager.disabled_providers)
     receipts_dirs = {"openrouter": Path(root) / "memory_f" / "openrouter_receipts",
                      ALIBABA: Path(root) / "memory_f" / "alibaba_receipts",
-                     OLLAMA: Path(root) / "memory_f" / "ollama_receipts"}
+                     OLLAMA: Path(root) / "memory_f" / "ollama_receipts",
+                     CUSTOM: Path(root) / "memory_f" / "custom_receipts"}
 
     def before(request):
         metadata = request["metadata"]
@@ -464,9 +533,10 @@ def install_roles(g, root, memory, meter, scope, local, pricing):
     def after(handle, receipt):
         # Settle billing first. An archive disk error must not erase a paid call.
         transport = receipt.get("transport") or "openrouter"
-        # Model Studio reports no cost: its receipt carries the price-table amount. Ollama costs nothing.
+        # Model Studio reports no cost: its receipt carries the price-table amount. Ollama costs nothing; a custom
+        # endpoint's cost is not tracked.
         extra = ({"reported_cost_usd": receipt.get("cost_usd")} if transport == ALIBABA
-                 else {"reported_cost_usd": 0.0} if transport == OLLAMA else {})
+                 else {"reported_cost_usd": 0.0} if transport in (OLLAMA, CUSTOM) else {})
         meter.finish(handle, usage=receipt["raw_usage"] or None, status=receipt["status"],
                      actual_model=receipt.get("actual_model"), actual_provider=receipt.get("actual_provider"),
                      provider_request_id=receipt.get("request_id"), error=receipt.get("error_type"), **extra)
@@ -481,6 +551,9 @@ def install_roles(g, root, memory, meter, scope, local, pricing):
             observer(event)
 
     def client(config=None):
+        if config is not None and config.get("transport") == CUSTOM:
+            return CustomClient(g["http_requests"], os.environ.get(key_name(config["endpoint_id"])), before, after,
+                                base_url=config["base_url"], name=config["provider_name"], event_sink=event_sink)
         if config is not None and config.get("transport") == OLLAMA:
             return OllamaClient(g["http_requests"], before, after, base_url=config["base_url"], event_sink=event_sink)
         if config is not None and config.get("transport") == ALIBABA:

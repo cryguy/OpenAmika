@@ -73,21 +73,22 @@ def first_line(text, limit=240):
     return ""
 
 
-def provider_detail(name, status, error):
+def provider_detail(name, status, error, *, hints=PROVIDER_HINTS):
     """'OpenRouter (HTTP 402): Insufficient credits … — OpenRouter is prepaid: …' from a status and the provider's
-    error object (a dict with message/code, or a string)."""
+    error object (a dict with message/code, or a string). ``hints``: the advice per status (none for a server whose
+    errors OpenRouter's advice does not fit)."""
     message = error.get("message") if isinstance(error, dict) else error
     code = error.get("code") if isinstance(error, dict) else None
     status = status if isinstance(status, int) and not isinstance(status, bool) else (
         code if isinstance(code, int) and not isinstance(code, bool) else None)
     line = first_line(message) or "no reason given"
-    hint = PROVIDER_HINTS.get(status)
-    if status == 404 and re.search(r"no endpoints|not a valid model|model.*(not found|does not exist)", line, re.I):
+    hint = (hints or {}).get(status)
+    if hints and status == 404 and re.search(r"no endpoints|not a valid model|model.*(not found|does not exist)", line, re.I):
         hint = NO_ENDPOINT_HINT
     return f"{name}{f' (HTTP {status})' if status else ''}: {line}" + (f" — {hint}" if hint else "")
 
 
-def response_detail(name, response):
+def response_detail(name, response, *, hints=PROVIDER_HINTS):
     """provider_detail of a refused HTTP response (its JSON error body, else its text); never raises."""
     status = getattr(response, "status_code", None)
     try:
@@ -100,7 +101,7 @@ def response_detail(name, response):
             error = getattr(response, "text", "") or ""
         except Exception:  # noqa: BLE001
             error = ""
-    return provider_detail(name, status, error)
+    return provider_detail(name, status, error, hints=hints)
 
 
 def describe_error(exc):

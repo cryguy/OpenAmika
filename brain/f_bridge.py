@@ -86,9 +86,10 @@ def _money(value):
 
 
 _EMBEDDING_PHASES=('query_embedding','memory_embedding')
-# Ledger providers whose calls go through f_roles' transports (OpenRouter, Alibaba Model Studio):
-# their call_receipt comes from F_OR_AFTER_CALL with stream timing, never from the meter listener.
-_ROLE_TRANSPORTS=('openrouter','alibaba','ollama')
+# Ledger providers whose calls go through f_roles' transports (OpenRouter, Alibaba Model Studio, Ollama, custom
+# OpenAI-compatible endpoints): their call_receipt comes from F_OR_AFTER_CALL with stream timing, never from the
+# meter listener.
+_ROLE_TRANSPORTS=('openrouter','alibaba','ollama','custom')
 _NULL_TOKENS={'input_tokens':None,'cached_tokens':None,'output_tokens':None}
 
 
@@ -1126,6 +1127,12 @@ def install(g):
         install_ollama(g)
     except Exception as error:
         print(f"[ollama] endpoints not installed: {error}")
+    try:
+        # any OpenAI-compatible server (LM Studio, vLLM, llama.cpp, Groq…): add endpoints, keys and models (Setup page)
+        from f_custom import install_custom
+        install_custom(g)
+    except Exception as error:
+        print(f"[custom] endpoints not installed: {error}")
     # OpenRouter calls (streams, drains, complete() memory writes, embeddings) reach
     # f_roles.after() exactly once, after metering; its observer builds their
     # call_receipt with first-token timing. An observer set earlier (e.g. a benchmark

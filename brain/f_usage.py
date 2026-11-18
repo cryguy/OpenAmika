@@ -21,7 +21,8 @@ Without it the row falls back to this meter's snapshot rates like any native pro
 Prompt cache: ``cache_reported`` (per row) says whether the provider's usage carried a
 cache figure at all (OpenRouter / OpenAI-style ``prompt_tokens_details.cached_tokens``,
 Anthropic ``cache_read_input_tokens``, Gemini on every chat call). Ollama and the local
-embedder never report one, so their calls have no cache share ("n/a"), not 0 %. The
+embedder never report one, so their calls have no cache share ("n/a"), not 0 %; a custom
+OpenAI-compatible endpoint (f_custom) has one only when its server reports it. The
 summaries' ``cache_hit_pct`` is cache reads over the input tokens of reporting calls only.
 """
 from __future__ import annotations
@@ -186,7 +187,7 @@ def normalize_usage(provider: str, usage: dict | None, model: str = "") -> dict:
         else:
             # Anthropic's ordinary cache TTL is five minutes when no split is supplied.
             tokens["cache_write_5m_tokens"] = creation
-    elif provider in {"openai", "xai", "groq", "openrouter", "deepseek", "local", "alibaba"}:   # local = embed_server.py (OpenAI-style usage, zero price)
+    elif provider in {"openai", "xai", "groq", "openrouter", "deepseek", "local", "alibaba", "custom"}:   # local = embed_server.py (OpenAI-style usage, zero price)
         prompt = count("prompt_tokens", required=True)
         embedding = (provider == "openrouter" and "embed" in model.lower()) or provider == "local"
         tokens["output_tokens"] = count("completion_tokens", required=not embedding)
