@@ -23,6 +23,8 @@ from f_usage import UsageMeter                                      # noqa: E402
 
 KEY = "sk-local-abcdefgh1234"
 ENDPOINT = {"id": "lmstudio", "name": "LM Studio", "base_url": "http://127.0.0.1:1234/v1", "json_mode": "json_object",
+            "reasoning_switch": "none",
+            "reasoning_effort": {"surface": "none", "deep": "none", "reflection": "low", "memory_write": "none"},
             "models": [{"name": "qwen3-32b", "context_length": 32768, "kind": "chat", "source": "detected"},
                        {"name": "text-embedding-nomic-embed-text-v1.5", "context_length": None, "kind": "embedding",
                         "source": "detected"},
@@ -110,20 +112,27 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(load_custom_config(root), {"endpoints": []})
             (root / "config" / "custom_llm.json").write_text('{"endpoints": 3}', encoding="utf-8")
             self.assertEqual(load_custom_config(root), {"endpoints": []})
-            rows = [dict(ENDPOINT, base_url="http://127.0.0.1:1234/v1/", json_mode="xml",
+            rows = [dict(ENDPOINT, base_url="http://127.0.0.1:1234/v1/", json_mode="xml", reasoning_switch="think-hard",
+                         reasoning_effort={"deep": "max", "reflection": None, "surface": "a lot", "memory_write": 3},
                          models=ENDPOINT["models"] + [{"name": ""}, {"name": "x" * 201}, {"name": "qwen3-32b"}, "odd",
                                                       {"name": "hand-added", "kind": "odd"}]),
                     dict(ENDPOINT, name="Duplicate id"), dict(ENDPOINT, id="Bad:Id"), dict(ENDPOINT, id="bad-url", base_url="box"),
-                    dict(ENDPOINT, id="long", name="n" * 61), dict(ENDPOINT, id="no-models", models={"a": 1}), "odd"]
+                    dict(ENDPOINT, id="long", name="n" * 61), "odd",
+                    {k: v for k, v in dict(ENDPOINT, id="no-models", models={"a": 1}).items()
+                     if k not in ("reasoning_switch", "reasoning_effort")}]
             save_custom_config(root, {"endpoints": rows})
             doc = load_custom_config(root)
             self.assertEqual([e["id"] for e in doc["endpoints"]], ["lmstudio", "no-models"])
             first = doc["endpoints"][0]
-            self.assertEqual((first["base_url"], first["json_mode"]), ("http://127.0.0.1:1234/v1", "json_object"))
+            self.assertEqual((first["base_url"], first["json_mode"], first["reasoning_switch"]),
+                             ("http://127.0.0.1:1234/v1", "json_object", "none"))
             self.assertEqual([m["name"] for m in first["models"]],
                              ["qwen3-32b", "text-embedding-nomic-embed-text-v1.5", "tiny-model", "hand-added"])
             self.assertEqual(first["models"][-1], {"name": "hand-added", "context_length": None, "kind": "chat", "source": "manual"})
-            self.assertEqual(doc["endpoints"][1]["models"], [])
+            self.assertEqual(first["reasoning_effort"], {"surface": "none", "deep": "max", "reflection": None,
+                                                         "memory_write": "none"})
+            self.assertEqual((doc["endpoints"][1]["models"], doc["endpoints"][1]["reasoning_switch"],
+                              doc["endpoints"][1]["reasoning_effort"]["reflection"]), ([], "none", "low"))
 
 
 class DiscoveryTests(unittest.TestCase):
@@ -208,6 +217,29 @@ class BodyTests(unittest.TestCase):
         self.assertNotIn("response_format", make_custom_body(writer, asks))
         with self.assertRaises(ValueError):
             make_custom_body(deep, [{"role": "tool", "content": "x"}])
+
+    def test_thinking_switch_and_effort_per_role(self):
+        plain = [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}]
+        sent = lambda body: {k: body[k] for k in ("reasoning_effort", "chat_template_kwargs", "reasoning") if k in body}
+        for role in ROLES:                  # switch "none": the server decides, nothing is sent whatever the efforts say
+            self.assertEqual(sent(make_custom_body(custom_role_config(self.custom, "lmstudio", "qwen3-32b", role), plain)), {})
+        efforts = {"surface": "none", "deep": "medium", "reflection": None, "memory_write": "minimal"}
+        for switch, expected in (
+                ("reasoning_effort", {"surface": {"reasoning_effort": "none"}, "deep": {"reasoning_effort": "medium"},
+                                      "reflection": {}, "memory_write": {"reasoning_effort": "minimal"}}),
+                ("chat_template_kwargs", {"surface": {"chat_template_kwargs": {"enable_thinking": False}},
+                                          "deep": {"chat_template_kwargs": {"enable_thinking": True}}, "reflection": {},
+                                          "memory_write": {"chat_template_kwargs": {"enable_thinking": True}}})):
+            custom = {"endpoints": [dict(self.custom["endpoints"][0], reasoning_switch=switch, reasoning_effort=efforts)]}
+            for role in ROLES:
+                config = custom_role_config(custom, "lmstudio", "qwen3-32b", role)
+                self.assertEqual(sent(make_custom_body(config, plain)), expected[role], (switch, role))
+                self.assertEqual(config["reasoning_enabled"], None if efforts[role] is None else efforts[role] != "none")
+        # the defaults: thinking for reflection only, as on Ollama
+        custom = {"endpoints": [dict(self.custom["endpoints"][0], reasoning_switch="reasoning_effort")]}
+        self.assertEqual({role: make_custom_body(custom_role_config(custom, "lmstudio", "qwen3-32b", role), plain)
+                          ["reasoning_effort"] for role in ROLES},
+                         {"surface": "none", "deep": "none", "reflection": "low", "memory_write": "none"})
 
 
 class ThinkTests(unittest.TestCase):
@@ -443,9 +475,13 @@ class RoleManagerTests(unittest.TestCase):
         # the same name again gets its own id; a change without a key leaves the key alone
         result, _ = self.call("/api/build_f/custom/endpoint", "custom-endpoint", {"name": "Groq", "base_url": "https://x.example/v1"})
         self.assertEqual([e["id"] for e in result["endpoints"]], ["lmstudio", "groq", "groq-2"])
-        result, _ = self.call("/api/build_f/custom/endpoint", "custom-endpoint", {"id": "groq", "json_mode": "json_schema"})
+        result, _ = self.call("/api/build_f/custom/endpoint", "custom-endpoint",
+                              {"id": "groq", "json_mode": "json_schema", "reasoning_switch": "reasoning_effort",
+                               "reasoning_effort": {"deep": "low", "memory_write": None}})
         groq = next(e for e in result["endpoints"] if e["id"] == "groq")
-        self.assertEqual((groq["json_mode"], groq["key"]["present"]), ("json_schema", True))
+        self.assertEqual((groq["json_mode"], groq["reasoning_switch"], groq["key"]["present"]),
+                         ("json_schema", "reasoning_effort", True))
+        self.assertEqual(groq["reasoning_effort"], {"surface": "none", "deep": "low", "reflection": "low", "memory_write": None})
         # a new key replaces the line; clear_key removes it
         self.call("/api/build_f/custom/endpoint", "custom-endpoint", {"id": "groq", "key": "gsk_" + "b" * 20})
         self.assertEqual((self.root / "brain" / ".env").read_text(encoding="utf-8").count("CUSTOM_LLM_KEY_GROQ="), 1)
@@ -455,7 +491,11 @@ class RoleManagerTests(unittest.TestCase):
         self.assertEqual((self.root / "brain" / ".env").read_text(encoding="utf-8"), "OPENROUTER_API_KEY=sk-or-x\n")
         for body, words in (({"id": "groq", "key": "two words"}, "characters"), ({"id": "nope", "name": "x"}, "no such"),
                             ({"name": "x", "base_url": "box:1234"}, "http://"), ({"name": "", "base_url": "http://x"}, "name"),
-                            ({"id": "groq", "json_mode": "xml"}, "json_mode"), ({"id": "groq", "key": KEY, "clear_key": True}, "not both")):
+                            ({"id": "groq", "json_mode": "xml"}, "json_mode"), ({"id": "groq", "key": KEY, "clear_key": True}, "not both"),
+                            ({"id": "groq", "reasoning_switch": "always"}, "reasoning_switch"),
+                            ({"id": "groq", "reasoning_effort": {"deep": "huge"}}, "reasoning_effort"),
+                            ({"id": "groq", "reasoning_effort": {"writer": "low"}}, "reasoning_effort"),
+                            ({"id": "groq", "reasoning_effort": "low"}, "reasoning_effort")):
             result, status = self.call("/api/build_f/custom/endpoint", "custom-endpoint", body)
             self.assertEqual(status, 400, body)
             self.assertIn(words, result["error"])

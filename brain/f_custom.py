@@ -2,10 +2,10 @@
 DeepSeek…) as a transport for the four Build F roles.
 
 ``config/custom_llm.json`` (machine-local, like ollama.json) lists the endpoints: an id, a display name, the base URL,
-the JSON mode its server accepts for the memory writer, and its models, read from ``GET {base}/models`` or added by
-hand for a server without that route. f_roles generates one option per endpoint, chat model and role
-("<role>:custom:<endpoint>:<model>"), zero-priced in the ledger: a local server charges nothing, and a paid one's
-price is not known here, so its cost is not tracked.
+the JSON mode its server accepts for the memory writer, how its server is told how much to think (a switch and an
+effort per role), and its models, read from ``GET {base}/models`` or added by hand for a server without that route.
+f_roles generates one option per endpoint, chat model and role ("<role>:custom:<endpoint>:<model>"), zero-priced in
+the ledger: a local server charges nothing, and a paid one's price is not known here, so its cost is not tracked.
 
 An endpoint's key is optional and lives only in ``brain/.env`` as ``CUSTOM_LLM_KEY_<ID>``. It is read when a call is
 made and sent only to that endpoint's own URL, never along a redirect. Receipts, metering and the drain are the
@@ -25,7 +25,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from f_memory import _write
-from f_ollama import ANSWER_TOKENS
+from f_ollama import ANSWER_TOKENS, THINKING_ROLES
 from f_openrouter import (FACT_SCHEMA, MAX_OUTPUT_TOKENS, OpenRouterClient, OpenRouterError, ROLES, _body_size, _merge,
                           normalize_usage, provider_detail, response_detail)
 from f_usage import _label
@@ -33,6 +33,13 @@ from f_usage import _label
 CUSTOM = "custom"
 CONFIG_NAME = "custom_llm.json"
 JSON_MODES = ("json_object", "json_schema", "none")
+# How a server is told how much to think; the OpenAI API has no field every server reads. "none" sends nothing and
+# leaves it to the server. Each role has its own effort (None: nothing sent for it); chat_template_kwargs knows only
+# on and off, so there "none" is off and any other effort on. By default only THINKING_ROLES think, as on Ollama:
+# elsewhere thinking delays her voice and spends the memory writer's answer cap.
+REASONING_SWITCHES = ("none", "reasoning_effort", "chat_template_kwargs")
+EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+DEFAULT_EFFORTS = {role: "low" if role in THINKING_ROLES else "none" for role in ANSWER_TOKENS}   # role order
 KINDS = ("chat", "embedding")
 SOURCES = ("detected", "manual")
 KEY_PREFIX = "CUSTOM_LLM_KEY_"
@@ -105,6 +112,13 @@ def _model_row(row):
             "source": row["source"] if row.get("source") in SOURCES else "manual"}
 
 
+def _efforts(value):
+    """role → effort or None (nothing sent), each missing or odd role at its default."""
+    value = value if isinstance(value, dict) else {}
+    return {role: value[role] if role in value and (value[role] is None or value[role] in EFFORTS) else default
+            for role, default in DEFAULT_EFFORTS.items()}
+
+
 def _endpoint_row(row):
     if not isinstance(row, dict) or not isinstance(row.get("id"), str) or not _ID_RE.fullmatch(row["id"]):
         return None
@@ -122,6 +136,8 @@ def _endpoint_row(row):
             models.append(model)
     return {"id": row["id"], "name": name, "base_url": base,
             "json_mode": row["json_mode"] if row.get("json_mode") in JSON_MODES else "json_object",
+            "reasoning_switch": row["reasoning_switch"] if row.get("reasoning_switch") in REASONING_SWITCHES else "none",
+            "reasoning_effort": _efforts(row.get("reasoning_effort")),
             "models": models, "detected_at": row["detected_at"] if isinstance(row.get("detected_at"), str) else None}
 
 
@@ -221,10 +237,15 @@ def custom_role_config(custom, endpoint_id, model_name, role, *, max_tokens=None
     except ValueError:
         raise ValueError(f"The usage ledger cannot record the model name {model_name}: it takes letters, digits, "
                          f"spaces and . _ - : / @ + only, up to {159 - len(endpoint_id)} characters.") from None
+    switch = endpoint["reasoning_switch"]
+    effort = endpoint["reasoning_effort"][role] if switch != "none" else None
     return {"transport": CUSTOM, "model_id": model_id, "api_model": model_name, "canonical_slug": model_name,
             "provider_tag": CUSTOM, "provider_name": endpoint["name"], "endpoint_id": endpoint_id,
             "base_url": endpoint["base_url"], "json_mode": endpoint["json_mode"], "quantization": None,
-            "role": role, "max_tokens": answer, "reasoning": None, "reasoning_enabled": False,
+            "role": role, "max_tokens": answer,
+            "reasoning": None if effort is None else {"switch": switch, "effort": effort},
+            "reasoning_switch": switch, "reasoning_effort": effort,
+            "reasoning_enabled": None if effort is None else effort != "none",
             "mandatory_reasoning": False,
             "max_price": {"prompt": 0.0, "completion": 0.0, "request": 0.0}, "reservation_input_rate": 0.0,
             "endpoint_context_tokens": row["context_length"], "endpoint_max_completion_tokens": None,
@@ -232,7 +253,8 @@ def custom_role_config(custom, endpoint_id, model_name, role, *, max_tokens=None
 
 
 def make_custom_body(config, messages, *, stream=True, json_schema=None):
-    """OpenAI chat-completions request: the answer cap and, for the memory writer, the endpoint's JSON mode."""
+    """OpenAI chat-completions request: the answer cap, the endpoint's thinking switch and, for the memory writer, its
+    JSON mode."""
     if config.get("transport") != CUSTOM or config.get("role") not in ROLES or not config.get("api_model"):
         raise ValueError("Use a validated custom role config")
     if not isinstance(messages, list) or not messages:
@@ -246,6 +268,11 @@ def make_custom_body(config, messages, *, stream=True, json_schema=None):
             "max_tokens": config["max_tokens"]}
     if stream:
         body["stream_options"] = {"include_usage": True}
+    effort = config.get("reasoning_effort")
+    if effort is not None and config["reasoning_switch"] == "reasoning_effort":
+        body["reasoning_effort"] = effort
+    elif effort is not None and config["reasoning_switch"] == "chat_template_kwargs":
+        body["chat_template_kwargs"] = {"enable_thinking": effort != "none"}
     mode = config.get("json_mode") if (config["role"] == "memory_write" or json_schema is not None) else "none"
     if mode == "json_schema":
         body["response_format"] = {"type": "json_schema", "json_schema": {
@@ -577,8 +604,8 @@ def install_custom(g):
                     return jsonify(status(probe=False))
                 if endpoint is None:
                     endpoint = {"id": endpoint_slug(value.get("name") or "", {e["id"] for e in doc["endpoints"]}),
-                                "name": "", "base_url": None, "json_mode": "json_object", "models": [],
-                                "detected_at": None}
+                                "name": "", "base_url": None, "json_mode": "json_object", "reasoning_switch": "none",
+                                "reasoning_effort": dict(DEFAULT_EFFORTS), "models": [], "detected_at": None}
                     doc["endpoints"].append(endpoint)
                 name = value.get("name", endpoint["name"])
                 if not isinstance(name, str) or not 1 <= len(name.strip()) <= MAX_NAME:
@@ -586,8 +613,18 @@ def install_custom(g):
                 mode = value.get("json_mode", endpoint["json_mode"])
                 if mode not in JSON_MODES:
                     raise ValueError("json_mode must be json_object, json_schema or none.")
-                endpoint.update(name=name.strip(), base_url=custom_base_url(value.get("base_url", endpoint["base_url"])),
-                                json_mode=mode)
+                switch = value.get("reasoning_switch", endpoint["reasoning_switch"])
+                if switch not in REASONING_SWITCHES:
+                    raise ValueError("reasoning_switch must be none, reasoning_effort or chat_template_kwargs.")
+                efforts = value.get("reasoning_effort", {})
+                valid = isinstance(efforts, dict) and all(
+                    role in DEFAULT_EFFORTS and (effort is None or effort in EFFORTS) for role, effort in efforts.items())
+                if not valid:
+                    raise ValueError("reasoning_effort maps surface, deep, reflection or memory_write to one of "
+                                     + ", ".join(EFFORTS) + ", or to null (nothing sent).")
+                base_url = custom_base_url(value.get("base_url", endpoint["base_url"]))
+                endpoint.update(name=name.strip(), base_url=base_url, json_mode=mode, reasoning_switch=switch,
+                                reasoning_effort=dict(endpoint["reasoning_effort"], **efforts))
                 save(doc)
                 if key or clear_key:
                     set_env_key(env_path, key_name(endpoint["id"]), key or None)

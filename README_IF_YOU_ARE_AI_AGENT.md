@@ -594,18 +594,26 @@ Invoke-RestMethod -Method Post -Uri "$page/api/build_f/custom/use" -ContentType 
   or removes one (`"remove": true`). `use` takes `{"endpoint", "model"}` for all four roles, or `{"roles": {"<role>":
   {"endpoint", "model"}}}`; `GET /api/build_f/custom` lists the endpoints, their models, whether a key is saved (its
   last four characters) and whether each answers.
-- Files: `config/custom_llm.json` (git-ignored): `{"endpoints": [{"id", "name", "base_url", "json_mode", "models":
-  [{"name", "context_length", "kind", "source"}], "detected_at"}]}`; the key only in `brain/.env` as
-  `CUSTOM_LLM_KEY_<ID>` (the id upper-cased, `-` as `_`), read when a call is made, sent as a bearer header to that
-  endpoint's own address and never along a redirect; the selections in `config/llm_roles.json` as
-  `"<role>:custom:<id>:<model>"`, for example `"deep": "deep:custom:lm-studio:qwen3-32b"`.
+- Files: `config/custom_llm.json` (git-ignored): `{"endpoints": [{"id", "name", "base_url", "json_mode",
+  "reasoning_switch", "reasoning_effort": {"<role>": "<effort>"}, "models": [{"name", "context_length", "kind",
+  "source"}], "detected_at"}]}`; the key only in `brain/.env` as `CUSTOM_LLM_KEY_<ID>` (the id upper-cased, `-` as
+  `_`), read when a call is made, sent as a bearer header to that endpoint's own address and never along a redirect;
+  the selections in `config/llm_roles.json` as `"<role>:custom:<id>:<model>"`, for example `"deep":
+  "deep:custom:lm-studio:qwen3-32b"`.
 - What she sends: the messages, `max_tokens` (the Ollama caps: surface 400, deep 1,500, reflection 3,000, memory
-  writer 6,000) and `stream_options.include_usage`; no thinking switch and no context size, since the OpenAI API has
-  neither. The server sets the context window when it loads the model: give it 16k tokens or more (LM Studio: Context
-  Length; llama.cpp: `-c 16384`; vLLM: `--max-model-len 16384`); her prompts are ~8k. The memory writer asks for JSON
-  the way the endpoint's `json_mode` says: `json_object` (the default), `json_schema` (the strict fact schema; LM Studio
-  takes only this one) or `none`. `<think>…</think>` blocks that a server without a reasoning parser streams inside
-  the answer are cut out of what she says and of the writer's JSON; a separate `reasoning_content` is never read.
+  writer 6,000) and `stream_options.include_usage`; no context size, since the OpenAI API has none. The server sets
+  the context window when it loads the model: give it 16k tokens or more (LM Studio: Context Length; llama.cpp: `-c
+  16384`; vLLM: `--max-model-len 16384`); her prompts are ~8k. How much a model thinks goes through the endpoint's
+  `reasoning_switch`, because no field of the OpenAI API is read by every server: `none` (the default) sends nothing
+  and leaves it to the server; `reasoning_effort` sends the role's effort as `reasoning_effort` (OpenAI-style APIs and
+  routers); `chat_template_kwargs` sends `{"enable_thinking": false}` for an effort of `none` and `true` for any other
+  (vLLM, llama.cpp: on or off only). `reasoning_effort` holds one effort per role (`none`, `minimal`, `low`, `medium`,
+  `high`, `xhigh`, `max`, or `null` to send nothing for that role); the default, as on Ollama, thinks for reflection
+  only (`low`) and not for surface, deep or the memory writer, whose 6,000-token answer a long think can use up. A
+  model that cannot stop thinking keeps a short think. The memory writer asks for JSON the way the endpoint's
+  `json_mode` says: `json_object` (the default), `json_schema` (the strict fact schema; LM Studio takes only this one)
+  or `none`. `<think>…</think>` blocks that a server without a reasoning parser streams inside the answer are cut out
+  of what she says and of the writer's JSON; a separate `reasoning_content` is never read.
 - What is offered: chat models only (an id containing `embed` is an embedding model), and for a role only when the
   known context window is larger than its answer cap and the usage ledger can record the name (ASCII letters, digits,
   spaces and `. _ - : / @ +`). A detect keeps the models her roles use even when the server stops listing them (some

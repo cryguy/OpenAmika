@@ -97,6 +97,7 @@
             <div class="field" style="flex:2"><label>Key (optional)</label>
               <input type="password" id="cuKey" placeholder="only if the server asks for one" autocomplete="off"></div>
             <div class="field"><label>JSON mode</label><select id="cuJson"></select></div>
+            <div class="field"><label>Thinking switch</label><select id="cuThink"></select></div>
             <button class="btn small primary" id="cuSave">Save</button>
           </div>
         </div>
@@ -107,6 +108,7 @@
         <code style="white-space:nowrap">--max-model-len 16384</code>. Cloud APIs need nothing.
       </p>
       <p class="card-hint">JSON mode is how the memory writer asks for JSON: <code>json_object</code> for most servers, <code>json_schema</code> for LM Studio, <code>none</code> if the server refuses both.</p>
+      <p class="card-hint">Thinking switch is how she tells the server how much to think: <code>reasoning_effort</code> for OpenAI-style APIs and routers, <code>chat_template_kwargs</code> for vLLM or llama.cpp (on or off only), <code>none</code> to leave it to the server. Each role then has its own effort, under Change; by default only reflection thinks, as on Ollama.</p>
       <p class="card-hint">Her cost meter does not track custom endpoints: their calls count tokens at $0.</p>
     </div>
     <div data-pro>

@@ -749,7 +749,8 @@ async def build_f_ollama_use(request: Request):
 # ── custom endpoints: any server that speaks the OpenAI chat API (config/custom_llm.json; each key stays in brain/.env
 # and only whether one is saved, with its hint, reaches the page) ──
 _CUSTOM_FIELDS = ("ok", "endpoints", "in_use")
-_CUSTOM_ENDPOINT_FIELDS = ("id", "name", "base_url", "json_mode", "detected_at", "models", "key", "reachable", "error")
+_CUSTOM_ENDPOINT_FIELDS = ("id", "name", "base_url", "json_mode", "reasoning_switch", "reasoning_effort", "detected_at",
+                           "models", "key", "reachable", "error")
 _CUSTOM_MODEL_FIELDS = ("name", "context_length", "kind", "source")
 
 

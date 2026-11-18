@@ -14,7 +14,9 @@ def brain_status():
     """The brain's GET /api/build_f/custom answer, with fields the page must never see."""
     return {'ok': True, 'private': 'hidden',
             'endpoints': [{'id': 'groq', 'name': 'Groq', 'base_url': 'https://api.groq.com/openai/v1',
-                           'json_mode': 'json_object', 'detected_at': '2026-11-18T09:00:00+00:00',
+                           'json_mode': 'json_object', 'reasoning_switch': 'reasoning_effort',
+                           'reasoning_effort': {'surface': 'none', 'deep': 'none', 'reflection': 'low', 'memory_write': 'none'},
+                           'detected_at': '2026-11-18T09:00:00+00:00',
                            'models': [{'name': 'openai/gpt-oss-120b', 'context_length': 131072, 'kind': 'chat',
                                        'source': 'detected', 'raw': {'owned_by': 'OpenAI'}}],
                            'key': {'present': True, 'hint': '…kkkk', 'value': KEY}, 'reachable': True, 'error': None,
@@ -54,8 +56,8 @@ class CustomProxyTests(unittest.IsolatedAsyncioTestCase):
     def assert_page_view(self, result):
         self.assertEqual(set(result), {'ok', 'endpoints', 'in_use'})
         row = result['endpoints'][0]
-        self.assertEqual(set(row), {'id', 'name', 'base_url', 'json_mode', 'detected_at', 'models', 'key',
-                                    'reachable', 'error'})
+        self.assertEqual(set(row), {'id', 'name', 'base_url', 'json_mode', 'reasoning_switch', 'reasoning_effort',
+                                    'detected_at', 'models', 'key', 'reachable', 'error'})
         self.assertEqual(row['key'], {'present': True, 'hint': '…kkkk'})
         self.assertEqual(row['models'], [{'name': 'openai/gpt-oss-120b', 'context_length': 131072, 'kind': 'chat',
                                           'source': 'detected'}])

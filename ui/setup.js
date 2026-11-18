@@ -374,6 +374,8 @@
   // null), so the last answer is kept for an endpoint whose address and key did not change.
   const JSON_MODES = [["json_object", "json_object · most servers"], ["json_schema", "json_schema · LM Studio"],
                       ["none", "none · the server refuses both"]];
+  const THINKING = [["none", "none · server decides"], ["reasoning_effort", "reasoning_effort"],
+                    ["chat_template_kwargs", "chat_template_kwargs"]];
   const SMALL_CONTEXT = 16384;      // her prompts take about 8k tokens plus the answer
   let customInfo = null, customGen = 0;
   const cuPicked = {};              // endpoint id → the model picked in its select, kept across redraws
@@ -385,6 +387,21 @@
     return select;
   };
   $("cuJson").replaceChildren(...cuJsonOptions());
+  const cuThinkOptions = () => THINKING.map(([value, text]) => el("option", { value, text }));
+  const cuThinkSelect = (value) => {
+    const select = el("select", {}, ...cuThinkOptions());
+    select.value = value || "none";
+    return select;
+  };
+  $("cuThink").replaceChildren(...cuThinkOptions());
+  // one effort per role, sent through the endpoint's switch; "" sends nothing for that role
+  const EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+  const cuEffortSelect = (value) => {
+    const select = el("select", {}, el("option", { value: "", text: "send nothing" }),
+                      ...EFFORTS.map((effort) => el("option", { value: effort, text: effort })));
+    select.value = value || "";
+    return select;
+  };
   const cuChatModels = (endpoint) => (endpoint.models || []).filter((m) => m.kind === "chat");
   const cuFind = (id) => ((customInfo && customInfo.endpoints) || []).find((e) => e.id === id) || null;
   const cuPick = (endpoint) => cuChatModels(endpoint).find((m) => m.name === cuPicked[endpoint.id]) || null;
@@ -515,6 +532,24 @@
     const keyInput = el("input", { type: "password", autocomplete: "off",
       placeholder: key.present ? "paste a key · blank keeps the saved one" : "only if the server asks for one" });
     const mode = cuJsonSelect(endpoint.json_mode);
+    const think = cuThinkSelect(endpoint.reasoning_switch);
+    const efforts = Object.fromEntries(ROLES.map((role) => [role, cuEffortSelect((endpoint.reasoning_effort || {})[role])]));
+    const effortWarn = el("p", { class: "card-hint", style: "color:var(--err); margin:8px 0 0;" });
+    const effortRow = el("div", {},
+      el("div", { class: "form-row", style: "margin-top:12px;" },
+        ...ROLES.map((role) => el("div", { class: "field" },
+          el("label", { text: (ROLE_LABELS[role] || role).split(" — ")[0] + " effort" }), efforts[role]))),
+      effortWarn);
+    const showEfforts = () => {
+      effortRow.hidden = think.value === "none";
+      // the memory writer's answer cap (6,000 tokens) holds its thinking too: a long think cuts its JSON off
+      effortWarn.textContent = ["", "none", "minimal", "low"].includes(efforts.memory_write.value) ? ""
+        : "Above low, the memory writer's thinking can use up its 6,000-token answer and cut its JSON off.";
+      effortWarn.hidden = !effortWarn.textContent;
+    };
+    think.addEventListener("change", showEfforts);
+    efforts.memory_write.addEventListener("change", showEfforts);
+    showEfforts();
     const save = el("button", { class: "btn small primary", text: "Save changes" });
     const forget = key.present ? el("button", { class: "editorial-link", text: "Forget the key →" }) : null;
     const modelInput = el("input", { type: "text", autocomplete: "off", placeholder: "its id as the server knows it" });
@@ -528,7 +563,9 @@
       el("div", { class: "form-row" },
         el("div", { class: "field", style: "flex:2" }, el("label", { text: "Key" + (key.present ? " (saved" + (key.hint ? " " + key.hint : "") + ")" : " (optional)") }), keyInput),
         el("div", { class: "field" }, el("label", { text: "JSON mode" }), mode),
+        el("div", { class: "field" }, el("label", { text: "Thinking switch" }), think),
         save),
+      effortRow,
       forget ? el("div", { style: "margin-top:10px;" }, forget) : null,
       el("div", { class: "form-row", style: "margin-top:14px;" },
         el("div", { class: "field", style: "flex:2" }, el("label", { text: "Add a model by hand" }), modelInput), add),
@@ -551,7 +588,9 @@
     });
 
     save.addEventListener("click", async () => {
-      const body = { id: endpoint.id, name: name.value.trim(), base_url: url.value.trim(), json_mode: mode.value };
+      const body = { id: endpoint.id, name: name.value.trim(), base_url: url.value.trim(), json_mode: mode.value,
+                     reasoning_switch: think.value,
+                     reasoning_effort: Object.fromEntries(ROLES.map((role) => [role, efforts[role].value || null])) };
       if (keyInput.value.trim()) body.key = keyInput.value.trim();
       save.disabled = true;
       try {
@@ -614,12 +653,13 @@
     if (!name) { toast("Give the endpoint a name.", true); $("cuName").focus(); return; }
     if (!baseUrl) { toast("Enter the server's address, e.g. http://127.0.0.1:1234/v1", true); $("cuUrl").focus(); return; }
     const before = new Set(((customInfo && customInfo.endpoints) || []).map((e) => e.id));
-    const body = { name, base_url: baseUrl, json_mode: $("cuJson").value };
+    const body = { name, base_url: baseUrl, json_mode: $("cuJson").value, reasoning_switch: $("cuThink").value };
     if (key) body.key = key;
     $("cuSave").disabled = true;
     try {
       const info = await postAction("/api/build_f/custom/endpoint", "custom-endpoint", body);
       $("cuName").value = ""; $("cuUrl").value = ""; $("cuKey").value = ""; $("cuJson").value = "json_object";
+      $("cuThink").value = "none";
       $("cuAdd").open = false;
       showCustom(info);
       // a new endpoint is added last; asking it for its models once saves a click (a failure keeps the endpoint)
