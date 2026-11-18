@@ -497,8 +497,8 @@ def key_state(endpoint_id):
 def install_custom(g):
     """GET /api/build_f/custom (the endpoints, their models and keys, up or down), POST …/custom/endpoint (add,
     change or remove one, and its key), …/custom/detect (read its model list), …/custom/model (add or remove a model
-    by hand) and …/custom/use (one model for all four roles, or a role → model map). Installed by f_bridge after the
-    role manager."""
+    by hand) and …/custom/use (one model for all four roles, or a role → model and effort map). Installed by f_bridge
+    after the role manager."""
     from f_roles import ROLES as ROLE_ORDER     # here, not at the top: f_roles imports this module
     app, request, jsonify = g["app"], g["request"], g["jsonify"]
     root = Path(g["__file__"]).resolve().parent.parent
@@ -708,10 +708,19 @@ def install_custom(g):
         try:
             value = action_request("custom-use")
             roles = value.get("roles") if isinstance(value.get("roles"), dict) else {}
+            if set(roles) - set(ROLE_ORDER):
+                raise ValueError("roles maps " + ", ".join(ROLE_ORDER) + " to an endpoint and a model.")
+            # A top-level endpoint and model fill every role that roles does not name; without them, a role that roles
+            # does not name keeps what it runs now (a page that shows OpenRouter or Ollama roles leaves them alone).
+            everyone = "endpoint" in value or "model" in value
+            if not everyone and not roles:
+                raise ValueError("Pick an endpoint and one of its models (one for all four roles, or one per role).")
             # force: after Unlock (f_controls) — work still in flight keeps its model, new calls take this one
             force = flag(value, "force")
-            selections = {}
+            picks, efforts = {}, {}
             for role in ROLE_ORDER:
+                if role not in roles and not everyone:
+                    continue
                 pick = roles.get(role, value)
                 endpoint, model = (pick.get("endpoint"), pick.get("model")) if isinstance(pick, dict) else (None, None)
                 if not isinstance(endpoint, str) or not isinstance(model, str) or not model.strip():
@@ -724,10 +733,27 @@ def install_custom(g):
                     except ValueError as error:
                         reason = str(error)
                     raise ValueError(reason)
-                selections[role] = key
-            result = manager.set(selections, force=True) if force else manager.set(selections)
+                picks[role] = key
+                # how hard the role thinks on that endpoint: kept with the endpoint, like the efforts …/endpoint saves
+                if "effort" in pick:
+                    if pick["effort"] is not None and pick["effort"] not in EFFORTS:
+                        raise ValueError("effort is one of " + ", ".join(EFFORTS) + ", or null (nothing sent).")
+                    efforts.setdefault(endpoint, {})[role] = pick["effort"]
+            # The switch first: a refused one (busy) changes nothing, efforts included. The lock keeps another switch
+            # from landing between reading the roles this one keeps and setting them.
+            with manager.lock:
+                selections = dict(manager.selections, **picks)
+                result = manager.set(selections, force=True) if force else manager.set(selections)
+            if efforts:
+                with _LOCK:
+                    doc = load_custom_config(root)
+                    for endpoint_id, by_role in efforts.items():
+                        endpoint = find(doc, endpoint_id)
+                        endpoint["reasoning_effort"] = dict(endpoint["reasoning_effort"], **by_role)
+                    save(doc)
+            out = status(probe=False)
             return jsonify({"ok": True, "selections": result["selections"], "transport": result["transport"],
-                            "in_use": in_use(manager)})
+                            "in_use": out["in_use"], "endpoints": out["endpoints"]})
         except PermissionError as error:
             return jsonify({"ok": False, "error": str(error)}), 403
         except ValueError as error:

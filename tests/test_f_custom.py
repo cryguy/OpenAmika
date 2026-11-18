@@ -535,6 +535,38 @@ class RoleManagerTests(unittest.TestCase):
         self.assertEqual((self.root / "brain" / ".env").read_text(encoding="utf-8"), "")
         self.assertFalse([k for k in self.manager.options["deep"] if ":custom:" in k])
 
+    def test_use_per_role_keeps_the_roles_it_does_not_name_and_saves_their_efforts(self):
+        self.call("/api/build_f/custom/endpoint", "custom-endpoint", {"id": "lmstudio", "reasoning_switch": "reasoning_effort"})
+        result, status = self.call("/api/build_f/custom/use", "custom-use", {"roles": {
+            "deep": {"endpoint": "lmstudio", "model": "qwen3-32b", "effort": "high"},
+            "reflection": {"endpoint": "lmstudio", "model": "qwen3-32b", "effort": None}}})
+        self.assertEqual(status, 200, result)
+        self.assertEqual(self.manager.selections, {"surface": "or:surface", "deep": "deep:custom:lmstudio:qwen3-32b",
+                                                   "reflection": "reflection:custom:lmstudio:qwen3-32b",
+                                                   "memory_write": "or:memory_write"})
+        self.assertEqual(result["in_use"], {role: {"endpoint": "lmstudio", "model": "qwen3-32b"} for role in ("deep", "reflection")})
+        efforts = {"surface": "none", "deep": "high", "reflection": None, "memory_write": "none"}
+        self.assertEqual(result["endpoints"][0]["reasoning_effort"], efforts)
+        self.assertEqual(json.loads((self.root / "config/custom_llm.json").read_text())["endpoints"][0]["reasoning_effort"], efforts)
+        # the live options take the new efforts at once: the next deep call asks for high, reflection sends nothing
+        deep = self.manager.options["deep"]["deep:custom:lmstudio:qwen3-32b"]["config"]
+        reflection = self.manager.options["reflection"]["reflection:custom:lmstudio:qwen3-32b"]["config"]
+        self.assertEqual((deep["reasoning_effort"], reflection["reasoning_effort"]), ("high", None))
+        # a switch refused as busy changes nothing, efforts included
+        self.g["_ws_active"] = {"turn": True}
+        result, status = self.call("/api/build_f/custom/use", "custom-use", {"roles": {
+            "surface": {"endpoint": "lmstudio", "model": "qwen3-32b", "effort": "max"}}})
+        self.assertEqual((status, result["code"]), (409, "model_busy"))
+        self.assertEqual(self.manager.selections["surface"], "or:surface")
+        self.assertEqual(json.loads((self.root / "config/custom_llm.json").read_text())["endpoints"][0]["reasoning_effort"], efforts)
+        self.g["_ws_active"] = {}
+        for body, words in (({"roles": {}}, "Pick an endpoint"), ({"roles": {"writer": {"endpoint": "lmstudio", "model": "qwen3-32b"}}}, "roles maps"),
+                            ({"roles": {"deep": {"endpoint": "lmstudio", "model": "qwen3-32b", "effort": "huge"}}}, "effort is one of"),
+                            ({"roles": {"deep": {"endpoint": "lmstudio"}}}, "Pick an endpoint")):
+            result, status = self.call("/api/build_f/custom/use", "custom-use", body)
+            self.assertEqual(status, 400, body)
+            self.assertIn(words, result["error"])
+
     def test_detect_keeps_hand_added_models_and_says_why_it_failed(self):
         http = self.g["http_requests"]
         http.responses = [Response(data={"data": [{"id": "qwen3-32b", "max_model_len": 40960}, {"id": "tiny-model"},

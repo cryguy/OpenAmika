@@ -592,8 +592,10 @@ Invoke-RestMethod -Method Post -Uri "$page/api/build_f/custom/use" -ContentType 
   `GET <base_url>/models` (`data[].id`, and the context window where the server lists one: `context_length`,
   `context_window` or `max_model_len`). `model` adds a model by hand for a server without that route (`{"id", "name"}`)
   or removes one (`"remove": true`). `use` takes `{"endpoint", "model"}` for all four roles, or `{"roles": {"<role>":
-  {"endpoint", "model"}}}`; `GET /api/build_f/custom` lists the endpoints, their models, whether a key is saved (its
-  last four characters) and whether each answers.
+  {"endpoint", "model", "effort"}}}` for the roles it names (the others keep what they run, or take a top-level
+  `endpoint` and `model` when the body has them); `effort` (optional, see below) becomes that endpoint's effort for
+  the role once the switch went through, and a switch refused as busy changes nothing. `GET /api/build_f/custom` lists
+  the endpoints, their models, whether a key is saved (its last four characters) and whether each answers.
 - Files: `config/custom_llm.json` (git-ignored): `{"endpoints": [{"id", "name", "base_url", "json_mode",
   "reasoning_switch", "reasoning_effort": {"<role>": "<effort>"}, "models": [{"name", "context_length", "kind",
   "source"}], "detected_at"}]}`; the key only in `brain/.env` as `CUSTOM_LLM_KEY_<ID>` (the id upper-cased, `-` as
