@@ -46,7 +46,7 @@ async function open(t, viewport = { width: 1440, height: 900 }, deviceScaleFacto
       return route.fulfill({ body: await fs.readFile(f), contentType });
     }
     const fixtures = {
-      '/api/build_f/persona': { onboarded: true },
+      '/api/build_f/persona': options.persona || { onboarded: true },
       '/api/stage': { blur: 12, background: null },
       '/api/avatar/models': { models: [], emotions: [] },
       '/api/vision': { enabled: true },
@@ -54,6 +54,8 @@ async function open(t, viewport = { width: 1440, height: 900 }, deviceScaleFacto
     };
     return route.fulfill({ json: fixtures[p] || {} });
   });
+  // Registered later, so they answer before the fixtures above.
+  for (const [url, handler] of Object.entries(options.routes || {})) await page.route(url, handler);
   await page.addInitScript(({ host, handover, mediaDevices, savedDevices, outputFailure, inputFailure }) => {
     window.fixture = { sockets: [], streams: [], requests: [], pending: [], holdMedia: false, denyMedia: false };
     for (const [kind, id] of Object.entries(savedDevices || {})) localStorage.setItem('openamika-' + kind + 'Device', id);
@@ -980,4 +982,140 @@ test('shared controls retain saved devices and forward the upstream model-unlock
   assert.deepEqual(received.body, { force: true });
   assert.equal(await p.evaluate(() => OA.devices.get('mic')), 'chosen-microphone');
   assert.equal(await p.evaluate(() => OA.keyBalance({ credits: { ok: true, empty: true } }).level), 'err');
+});
+
+// The first-run wizard plays while build_f.json is not onboarded: her name, the city and one more click reach her
+// brain step. Her voice is refused, so no line plays.
+async function wizardBrain(t, routes, viewport) {
+  const p = await open(t, viewport, 1, false, { persona: { onboarded: false, persona_name: 'Amika' }, routes: {
+    '**/api/tts_say': route => route.fulfill({ status: 503, json: { detail: 'Speech is not running' } }), ...routes } });
+  await p.getByPlaceholder('your name').fill('Sam');
+  await p.getByRole('button', { name: "That's me →" }).click();
+  await p.getByPlaceholder('e.g. Los Angeles').fill('Osaka');
+  await p.getByRole('button', { name: 'Here we are →' }).click();
+  await p.getByRole('button', { name: 'Set me up →' }).click();
+  // the step starts on the provider she uses: wait for that pick before clicking another
+  await p.locator('.oa-wizard .prov[aria-pressed="true"]').waitFor();
+  return p;
+}
+
+// The brain's custom endpoints as f_custom keeps them: every answer is the whole status. calls records what the page
+// sent; refuse answers one route with a status and the detail the gateway forwards.
+function customBrain({ endpoints = [], inUse = {}, detected, refuse = {} } = {}) {
+  const state = { ok: true, endpoints: structuredClone(endpoints), in_use: inUse };
+  const calls = [];
+  const handle = name => async route => {
+    const request = route.request();
+    const body = request.method() === 'POST' ? request.postDataJSON() : null;
+    calls.push({ name, action: request.headers()['x-build-f-action'] || null, body });
+    if (refuse[name]) return route.fulfill({ status: refuse[name][0], json: { detail: refuse[name][1] } });
+    const endpoint = state.endpoints.find(e => e.id === body?.id);
+    if (name === 'endpoint' && endpoint) Object.assign(endpoint, { name: body.name, base_url: body.base_url });
+    else if (name === 'endpoint') state.endpoints.push({ id: body.name.toLowerCase().replace(/\W+/g, '-'), name: body.name,
+      base_url: body.base_url, json_mode: 'json_object', detected_at: null, models: [],
+      key: { present: !!body.key, hint: body.key ? '…' + body.key.slice(-4) : null }, reachable: null, error: null });
+    else if (name === 'detect') Object.assign(endpoint, { models: detected ?? endpoint.models, detected_at: '2026-11-18T09:00:00+00:00', reachable: true });
+    else if (name === 'model') endpoint.models.push({ name: body.name, context_length: null, kind: 'chat', source: 'manual' });
+    else if (name === 'use') return route.fulfill({ json: { ok: true, selections: {}, transport: {}, in_use: {} } });
+    return route.fulfill({ json: state });
+  };
+  return { calls, posted: () => calls.filter(c => c.body).map(c => [c.action, c.body]),
+    routes: Object.fromEntries(['status', 'endpoint', 'detect', 'model', 'use'].map(name =>
+      ['**/api/build_f/custom' + (name === 'status' ? '' : '/' + name), handle(name)])) };
+}
+const customModel = (name, context_length, kind = 'chat') => ({ name, context_length, kind, source: 'detected' });
+const toastText = p => p.waitForFunction(() => document.querySelector('.oa-toast.show')?.textContent).then(h => h.jsonValue());
+
+test('the first-run brain step offers Custom; Connect saves the endpoint, detects it, and lists chat models only', async t => {
+  const brain = customBrain({ detected: [customModel('qwen3-32b', 32768), customModel('nomic-embed-text', 2048, 'embedding'),
+    customModel('tiny-chat', 4096)] });
+  const p = await wizardBrain(t, brain.routes);
+  assert.deepEqual(await p.locator('.oa-wizard .prov b').allTextContents(), ['OpenRouter', 'Ollama', 'Custom']);
+  await p.getByRole('button', { name: /^Custom/ }).click();
+  assert.equal(await p.getByRole('button', { name: /^Custom/ }).getAttribute('aria-pressed'), 'true');
+  assert.match(await p.locator('.oa-wizard p.hint:visible').last().textContent(), /^Her prompts take about 8k tokens/);
+  await p.getByPlaceholder('http://127.0.0.1:1234/v1').fill('http://10.0.0.5:8000/v1');
+  await p.getByPlaceholder('only if the server asks for one').fill('gsk_test_key_1234');
+  await p.getByRole('button', { name: 'Connect' }).click();
+  assert.equal(await toastText(p), '2 chat model(s) found.');
+  assert.deepEqual(brain.posted(), [
+    ['custom-endpoint', { name: 'My server', base_url: 'http://10.0.0.5:8000/v1', key: 'gsk_test_key_1234' }],
+    ['custom-detect', { id: 'my-server' }],
+  ]);
+  assert.equal(await p.getByPlaceholder('saved …1234 · empty keeps it').inputValue(), '', 'the key leaves the form once saved');
+  const select = p.locator('.oa-wizard select:visible');
+  assert.deepEqual(await select.evaluate(s => [...s.options].map(o => o.value)), ['qwen3-32b', 'tiny-chat']);
+  await select.selectOption('tiny-chat');
+  const warning = p.locator('.oa-wizard p.hint:visible').last();
+  assert.match(await warning.textContent(),
+    /^tiny-chat's context window is 4\D?096 tokens; her prompts take about 8k plus the answer: use 16k or more\.$/);
+  assert.equal(await warning.evaluate(e => e.style.color), 'var(--err)');
+  await p.getByRole('button', { name: 'Use this model' }).click();
+  await p.waitForFunction(() => document.querySelector('.oa-toast.show.err')?.textContent.includes("tiny-chat's context window"));
+  assert.deepEqual(brain.posted().at(-1), ['custom-use', { endpoint: 'my-server', model: 'tiny-chat' }]);
+});
+
+test('a refused detect shows its sentence; a server that lists no chat models takes a typed model id', async t => {
+  const sentence = 'My server (http://10.0.0.5:8000/v1): The server refused the key (HTTP 401): invalid api key';
+  const brain = customBrain({ refuse: { detect: [400, sentence] } });
+  const p = await wizardBrain(t, brain.routes);
+  await p.getByRole('button', { name: /^Custom/ }).click();
+  await p.getByPlaceholder('http://127.0.0.1:1234/v1').fill('http://10.0.0.5:8000/v1');
+  await p.getByRole('button', { name: 'Connect' }).click();
+  assert.equal(await toastText(p), sentence);
+  assert.equal(await p.locator('.oa-wizard .card-hint:visible', { hasText: sentence }).count(), 1);
+  assert.equal(await p.getByRole('button', { name: 'Use this model' }).isDisabled(), true);
+  await p.getByPlaceholder('e.g. qwen3-32b').fill('my-model');
+  await p.getByRole('button', { name: 'Add model' }).click();
+  await p.waitForFunction(() => document.querySelector('.oa-toast.show')?.textContent === 'my-model added.');
+  assert.deepEqual(brain.posted().at(-1), ['custom-model', { id: 'my-server', name: 'my-model' }]);
+  assert.equal(await p.locator('.oa-wizard select:visible').inputValue(), 'my-model');
+  assert.equal(await p.getByPlaceholder('e.g. qwen3-32b').isHidden(), true);
+  await p.getByRole('button', { name: 'Use this model' }).click();
+  await p.waitForFunction(() => document.querySelector('.oa-toast.show')?.textContent === 'My server: my-model.');
+  assert.deepEqual(brain.posted().at(-1), ['custom-use', { endpoint: 'my-server', model: 'my-model' }]);
+});
+
+test('a wizard opened with every role on a custom endpoint starts on it, and Connect updates that endpoint', async t => {
+  const lab = { id: 'lab', name: 'Lab box', base_url: 'http://10.0.0.5:8000/v1', json_mode: 'json_schema',
+    detected_at: '2026-11-18T08:00:00+00:00', models: [customModel('llama-70b', null), customModel('qwen3-32b', 32768)],
+    key: { present: true, hint: '…9f2c' }, reachable: true, error: null };
+  const roles = ['surface', 'deep', 'reflection', 'memory_write'];
+  const brain = customBrain({ endpoints: [lab], inUse: Object.fromEntries(roles.map(r => [r, { endpoint: 'lab', model: 'qwen3-32b' }])),
+    refuse: { use: [409, { code: 'model_busy', message: 'Model selection is busy: a reply is streaming. Wait a moment.' }] } });
+  const p = await wizardBrain(t, { ...brain.routes, '**/api/build_f/models': route => route.fulfill({ json: {
+    selections: Object.fromEntries(roles.map(r => [r, r + ':custom:lab:qwen3-32b'])),
+    options: Object.fromEntries(roles.map(r => [r, [{ key: r + ':custom:lab:qwen3-32b', transport: 'custom' }]])),
+  } }) });
+  assert.equal(await p.getByRole('button', { name: /^Custom/ }).getAttribute('aria-pressed'), 'true');
+  await p.waitForFunction(() => [...document.querySelectorAll('.oa-wizard input')].some(i => i.value === 'Lab box'));
+  assert.equal(await p.getByPlaceholder('http://127.0.0.1:1234/v1').inputValue(), 'http://10.0.0.5:8000/v1');
+  assert.equal(await p.getByPlaceholder('saved …9f2c · empty keeps it').count(), 1);
+  assert.equal(await p.locator('.oa-wizard select:visible').inputValue(), 'qwen3-32b');
+  await p.getByRole('button', { name: 'Connect' }).click();
+  await p.waitForFunction(() => document.querySelector('.oa-toast.show')?.textContent === '2 chat model(s) found.');
+  assert.deepEqual(brain.posted(), [
+    ['custom-endpoint', { id: 'lab', name: 'Lab box', base_url: 'http://10.0.0.5:8000/v1' }],
+    ['custom-detect', { id: 'lab' }],
+  ]);
+  await p.getByRole('button', { name: 'Use this model' }).click();
+  await p.waitForFunction(() => document.querySelector('.oa-toast.show.err')?.textContent === 'Model selection is busy: a reply is streaming. Wait a moment.');
+  assert.deepEqual(brain.posted().at(-1), ['custom-use', { endpoint: 'lab', model: 'qwen3-32b' }]);
+});
+
+test('the Custom panel fits a phone screen without sideways scrolling', async t => {
+  for (const [width, height] of [[390, 844], [320, 740]]) {
+    const brain = customBrain({ detected: [customModel('nomic-embed-text', 2048, 'embedding')] });
+    const p = await wizardBrain(t, brain.routes, { width, height });
+    await p.getByRole('button', { name: /^Custom/ }).click();
+    await p.getByPlaceholder('http://127.0.0.1:1234/v1').fill('http://192.168.100.200:12345/v1');
+    await p.getByRole('button', { name: 'Connect' }).click();
+    await p.getByPlaceholder('e.g. qwen3-32b').waitFor();
+    const fit = await p.evaluate(() => {
+      const box = document.querySelector('.oa-wizard'), edge = box.getBoundingClientRect().right;
+      return { page: document.documentElement.scrollWidth <= innerWidth, box: box.scrollWidth <= box.clientWidth,
+        inside: [...box.querySelectorAll('*')].every(e => e.getBoundingClientRect().right <= edge + 0.5) };
+    });
+    assert.deepEqual(fit, { page: true, box: true, inside: true }, `at ${width}px`);
+  }
 });

@@ -1418,7 +1418,7 @@ registerProcessor('pcm-pusher', PCMPusher);`;
   // the LLM calls whose prompt cache counts toward a round's cache hit (the speech server's round_summary.cached_pct)
   const LLM_KEYS = ["reflection_llm", "surface_llm", "deep_llm", "writer_llm"];
   const CACHE_NOTE = "Prompt cache hit: the share of the round's prompt tokens (surface, deep, reflection, memory writer) " +
-    "that the provider read from its prompt cache. n/a: the model reports no cache figures (Ollama).";
+    "that the provider read from its prompt cache. n/a: the model reports no cache figures (Ollama, some custom servers).";
   $("latLegend").replaceChildren(...PHASES.map((p) =>
     el("span", { class: "key" }, el("i", { style: "background:var(" + p.v + ")" }), p.label)),
     el("span", { class: "key cache-key", title: CACHE_NOTE }, "% = prompt cache hit"));
@@ -1599,7 +1599,7 @@ registerProcessor('pcm-pusher', PCMPusher);`;
         (unreported ? " · " + calls(unreported) + " n/a (no cache figures)" : "") + " · agents excluded";
     } else if (unreported) {
       value.textContent = "n/a";
-      sub.textContent = "her model reports no prompt cache figures (Ollama) · " + calls(unreported);
+      sub.textContent = "her model reports no prompt cache figures (Ollama, some custom servers) · " + calls(unreported);
     } else {
       value.textContent = "—";
       sub.textContent = "prompt tokens read from cache";
@@ -2066,19 +2066,24 @@ registerProcessor('pcm-pusher', PCMPusher);`;
         actions.append(button("← Back", () => go(1), "small"), button("Set me up →", () => go(3), "primary"));
       } else if (step === 3) {
         box.append(say(lines()[3]));
-        // two ways to give her a brain: OpenRouter (cloud, a key) or Ollama (fully local, your GPU)
+        // three ways to give her a brain: OpenRouter (cloud, a key), Ollama (fully local, your GPU) or any other server
+        // that speaks the OpenAI chat API (LM Studio, vLLM, llama.cpp, a hosted service)
         const choice = el("div", { class: "prov-switch" });
         const orBtn = el("button", { type: "button", class: "prov", "aria-pressed": "false" }, el("b", { text: "OpenRouter" }), el("span", { text: "recommended · her tested models · a few dollars a month" }));
         const olBtn = el("button", { type: "button", class: "prov", "aria-pressed": "false" }, el("b", { text: "Ollama" }), el("span", { text: "fully local · a 27B+ model · a 32 GB GPU or a second PC" }));
-        choice.append(orBtn, olBtn);
-        const orPanel = el("div", { class: "body" }), olPanel = el("div", { class: "body", hidden: "" });
+        const cuBtn = el("button", { type: "button", class: "prov", "aria-pressed": "false" }, el("b", { text: "Custom" }), el("span", { text: "any OpenAI-compatible server · LM Studio, vLLM, llama.cpp, Groq…" }));
+        choice.append(orBtn, olBtn, cuBtn);
+        const orPanel = el("div", { class: "body" }), olPanel = el("div", { class: "body", hidden: "" }), cuPanel = el("div", { class: "body", hidden: "" });
         const pick = (which) => {
-          orPanel.hidden = which !== "openrouter"; olPanel.hidden = which !== "ollama";
+          orPanel.hidden = which !== "openrouter"; olPanel.hidden = which !== "ollama"; cuPanel.hidden = which !== "custom";
           orBtn.setAttribute("aria-pressed", String(which === "openrouter")); olBtn.setAttribute("aria-pressed", String(which === "ollama"));
+          cuBtn.setAttribute("aria-pressed", String(which === "custom"));
           if (which === "ollama") loadOllamaPanel();
+          if (which === "custom") loadCustomPanel();
         };
         orBtn.addEventListener("click", () => pick("openrouter"));
         olBtn.addEventListener("click", () => pick("ollama"));
+        cuBtn.addEventListener("click", () => pick("custom"));
         // OpenRouter panel
         const line = el("span", { class: "card-hint", text: "checking…" });
         const input = el("input", { type: "password", placeholder: "sk-or-v1-…", autocomplete: "off" });
@@ -2153,11 +2158,118 @@ registerProcessor('pcm-pusher', PCMPusher);`;
         }, "small");
         olPanel.append(el("div", { class: "form-row" }, el("div", { class: "field", style: "flex:2" }, el("label", { text: "Ollama server" }), olUrl), detect), olStatus,
           el("div", { class: "form-row" }, el("div", { class: "field", style: "flex:2" }, el("label", { text: "Model for all four roles" }), olSelect), useBtn), olWarn, olNote);
-        body.append(choice, orPanel, olPanel);
+        // Custom panel: one endpoint (the one she uses, else the first saved one, else a new one) and its chat models
+        const cuName = el("input", { type: "text", maxlength: "60", value: "My server", autocomplete: "off" });
+        const cuUrl = el("input", { type: "text", placeholder: "http://127.0.0.1:1234/v1", autocomplete: "off" });
+        const cuKey = el("input", { type: "password", placeholder: "only if the server asks for one", autocomplete: "off" });
+        const cuStatus = el("span", { class: "card-hint", text: "" });
+        const cuSelect = el("select", {});
+        const cuTyped = el("input", { type: "text", maxlength: "200", placeholder: "e.g. qwen3-32b", autocomplete: "off" });
+        const cuContext = el("p", { class: "hint" });
+        let cuEndpoint = null, cuIds = new Set();
+        const cuChat = () => (cuEndpoint ? cuEndpoint.models || [] : []).filter((m) => m.kind === "chat");
+        // her prompts take about 8k tokens before the answer: a window known to be under 16k cannot hold a turn
+        const warnContext = () => {
+          const m = cuChat().find((x) => x.name === cuSelect.value);
+          const small = !!(m && m.context_length && m.context_length < 16384);
+          cuContext.textContent = small ? m.name + "'s context window is " + fmt.int(m.context_length) + " tokens; her prompts take about 8k plus the answer: use 16k or more."
+            : "Her prompts take about 8k tokens plus the answer: give the model a context window of 16k or more on the server.";
+          cuContext.style.color = small ? "var(--err)" : "";
+          return small ? cuContext.textContent : "";
+        };
+        cuSelect.addEventListener("change", warnContext);
+        const cuUse = button("Use this model", async () => {
+          const model = cuSelect.value;
+          if (!cuEndpoint || !model) { toast("Connect to the server and pick a model first.", true); return; }
+          const warning = warnContext();
+          try {
+            await postAction("/api/build_f/custom/use", "custom-use", { endpoint: cuEndpoint.id, model });
+            cuStatus.textContent = "She thinks on " + model + " at " + cuEndpoint.name + " now.";
+            toast(warning ? cuEndpoint.name + ": " + model + ". " + warning : cuEndpoint.name + ": " + model + ".", !!warning);
+          } catch (error) { toast(String(error.message || error), true); }
+        }, "small primary");
+        const cuAdd = button("Add model", async () => {
+          const name = cuTyped.value.trim();
+          if (!name) { toast("Type the model's id as the server knows it.", true); return; }
+          cuAdd.disabled = true;
+          try {
+            const r = await postAction("/api/build_f/custom/model", "custom-model", { id: cuEndpoint.id, name });
+            cuTyped.value = "";
+            showCustom(r, { id: cuEndpoint.id, select: name });
+            toast(name + " added.");
+          } catch (error) { toast(String(error.message || error), true); }
+          finally { cuAdd.disabled = false; }
+        }, "small");
+        cuTyped.addEventListener("keydown", (e) => { if (e.key === "Enter" && cuTyped.value.trim()) cuAdd.click(); });
+        const cuTypedRow = el("div", { class: "form-row", hidden: "" },
+          el("div", { class: "field", style: "flex:2" }, el("label", { text: "Model id, typed by hand" }), cuTyped), cuAdd);
+        // id: the endpoint to show; fill: put its name and address in the form; select: the model to pick
+        function showCustom(info, { id, fill, select } = {}) {
+          const endpoints = info.endpoints || [];
+          const used = (info.in_use || {}).deep;
+          cuIds = new Set(endpoints.map((e) => e.id));
+          cuEndpoint = endpoints.find((e) => e.id === id) || endpoints.find((e) => used && e.id === used.endpoint) || endpoints[0] || null;
+          if (cuEndpoint && fill) { cuName.value = cuEndpoint.name; cuUrl.value = cuEndpoint.base_url; }
+          const key = cuEndpoint && cuEndpoint.key;
+          cuKey.placeholder = key && key.present ? "saved " + (key.hint || "") + " · empty keeps it" : "only if the server asks for one";
+          const chat = cuChat(), keep = select || cuSelect.value;
+          cuSelect.replaceChildren(...(chat.length ? chat.map((m) => el("option", { value: m.name, text: m.name + (m.context_length ? " · " + Math.round(m.context_length / 1024) + "k context" : "") }))
+                                                   : [el("option", { value: "", text: cuEndpoint ? "— no chat models listed —" : "— connect first —" })]));
+          if (chat.some((m) => m.name === keep)) cuSelect.value = keep;
+          else if (used && cuEndpoint && used.endpoint === cuEndpoint.id && chat.some((m) => m.name === used.model)) cuSelect.value = used.model;
+          warnContext();
+          cuUse.disabled = !chat.length;
+          cuTypedRow.hidden = !cuEndpoint || chat.length > 0;
+          cuStatus.textContent = !cuEndpoint ? "Enter the server's address, then Connect."
+            : cuEndpoint.reachable === false ? cuEndpoint.name + " (" + cuEndpoint.base_url + "): " + (cuEndpoint.error || "not answering")
+            : cuEndpoint.name + (cuEndpoint.reachable ? " answers at " : " at ") + cuEndpoint.base_url + " · " + (chat.length ? chat.length + " chat model(s)" : cuEndpoint.detected_at ? "lists no chat models" : "press Connect to ask for its models");
+        }
+        const connect = button("Connect", async () => {
+          const base_url = cuUrl.value.trim();
+          if (!base_url) { toast("Enter the server's address first, e.g. http://127.0.0.1:1234/v1", true); return; }
+          connect.disabled = true; cuStatus.textContent = "saving…";
+          try {
+            const sent = { name: cuName.value.trim(), base_url };
+            if (cuEndpoint) sent.id = cuEndpoint.id;
+            if (cuKey.value.trim()) sent.key = cuKey.value.trim();
+            const before = cuIds;
+            const saved = await postAction("/api/build_f/custom/endpoint", "custom-endpoint", sent);
+            cuKey.value = "";
+            // a new endpoint is appended: the last id this page did not know yet
+            const id = sent.id || ((saved.endpoints || []).filter((e) => !before.has(e.id)).pop() || {}).id;
+            showCustom(saved, { id, fill: true });
+            cuStatus.textContent = "asking " + cuEndpoint.name + " for its models…";
+            const r = await postAction("/api/build_f/custom/detect", "custom-detect", { id: cuEndpoint.id });
+            showCustom(r, { id: cuEndpoint.id, fill: true });
+            const n = cuChat().length;
+            toast(n ? n + " chat model(s) found." : cuEndpoint.name + " answered, but lists no chat models: type the model's id below.", !n);
+          } catch (error) { cuStatus.textContent = String(error.message || error); toast(String(error.message || error), true); }
+          finally { connect.disabled = false; }
+        }, "small");
+        async function loadCustomPanel() {
+          connect.disabled = true;
+          if (!cuEndpoint) cuStatus.textContent = "checking…";
+          // a form the person has started stays as typed
+          try { showCustom(await getJSON("/api/build_f/custom"), { id: cuEndpoint && cuEndpoint.id, fill: !cuUrl.value.trim() }); }
+          catch (error) { cuStatus.textContent = String(error.message || error); }
+          finally { connect.disabled = false; }
+        }
+        warnContext();
+        cuSelect.append(el("option", { value: "", text: "— connect first —" }));
+        cuUse.disabled = true;
+        cuPanel.append(
+          el("div", { class: "form-row" },
+            el("div", { class: "field" }, el("label", { text: "Name" }), cuName),
+            el("div", { class: "field", style: "flex:2" }, el("label", { text: "Address" }), cuUrl)),
+          el("div", { class: "form-row" }, el("div", { class: "field", style: "flex:2" }, el("label", { text: "Key (optional)" }), cuKey), connect), cuStatus,
+          el("div", { class: "form-row" }, el("div", { class: "field", style: "flex:2" }, el("label", { text: "Model for all four roles" }), cuSelect), cuUse),
+          cuTypedRow, cuContext);
+        body.append(choice, orPanel, olPanel, cuPanel);
         // start on whichever she already uses
         getJSON("/api/build_f/models").then((m) => {
           const t = (role) => { const item = ((m.options || {})[role] || []).find((o) => o.key === (m.selections || {})[role]); return item ? item.transport : "openrouter"; };
-          pick(["surface", "deep", "reflection", "memory_write"].map(t).every((k) => k === "ollama") ? "ollama" : "openrouter");
+          const transports = ["surface", "deep", "reflection", "memory_write"].map(t);
+          pick(transports.every((k) => k === "ollama") ? "ollama" : transports.every((k) => k === "custom") ? "custom" : "openrouter");
         }).catch(() => pick("openrouter"));
         actions.append(button("← Back", () => go(2), "small"), button("Skip for now", () => go(4), "small skip"), button("Next →", () => go(4), "primary"));
       } else {
