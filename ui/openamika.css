@@ -787,6 +787,84 @@ html.pet .pet-bar .power-btn svg { width: 18px; height: 18px; }
 .server-head .target { color: var(--faint); font-size: 12.5px; flex: 1; min-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .policy-select { padding: 3px 8px; font-size: 12px; border-radius: 8px; }
 
+/* the Custom brain panel (ui/custom.js): her four roles, then the servers; narrow boxes stack each role */
+.cu-panel { container: cu-panel / inline-size; display: flex; flex-direction: column; }
+.cu-h { display: flex; align-items: baseline; justify-content: space-between; gap: 4px 12px; flex-wrap: wrap; margin: 18px 0 10px; }
+.cu-h h4 { margin: 0; font-size: 11px; font-weight: 600; letter-spacing: .18em; text-transform: uppercase; color: var(--muted); }
+.cu-h .card-hint { margin: 0; }
+.cu-roles { container: cu-roles / inline-size; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.cu-all { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 10px 14px; background: rgba(216, 180, 226, .05); border-bottom: 1px solid var(--line); }
+.cu-all span { font-size: 13px; color: var(--muted); }
+.cu-all select { flex: 1; min-width: 0; padding: 6px 12px; font-size: 14px; }
+.cu-head, .cu-row { display: grid; grid-template-columns: 170px minmax(0, 1fr) 256px; gap: 8px 14px; align-items: center; padding: 10px 14px; }
+.cu-head { padding-bottom: 0; font-size: 11px; font-weight: 600; letter-spacing: .18em; text-transform: uppercase; color: var(--faint); }
+.cu-row { border-bottom: 1px solid var(--line); }
+.cu-row .who b { display: block; font-size: 15px; font-weight: 600; color: var(--pearl); }
+.cu-row .who span { font-size: 12.5px; color: var(--faint); }
+.cu-row .model select { width: 100%; padding: 7px 12px; font-size: 14px; text-overflow: ellipsis; }
+.cu-row .think { display: flex; align-items: center; gap: 8px; }
+.cu-row .think small { display: none; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--faint); }
+.cu-row .warn { grid-column: 1 / -1; color: var(--err); font-size: 12.5px; margin: 0; }
+.cu-row.changed { background: rgba(232, 197, 71, .06); }
+.cu-row.changed .who b::after { content: " •"; color: var(--warn); }
+.cu-fixed { font-size: 13px; color: var(--faint); padding: 6px 0; white-space: nowrap; }
+.cu-foot { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 10px 14px; background: rgba(255, 255, 255, .02); }
+.seg { display: inline-flex; border: 1px solid rgba(216, 180, 226, .28); border-radius: 9999px; overflow: hidden; flex: none; }
+.seg button, .seg .more {
+  background: none; border: 0; border-radius: 0; color: var(--muted); padding: 6px 10px; cursor: pointer;
+  font: 600 12px var(--font-body); letter-spacing: .06em; white-space: nowrap;
+}
+.seg > * + * { border-left: 1px solid rgba(216, 180, 226, .18); }
+.seg .more { position: relative; }
+.seg .more select { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; padding: 0; border: 0; }
+.seg .more:has(select:focus-visible) { outline: 2px solid rgba(216, 180, 226, .6); outline-offset: -2px; }
+.seg button:hover:not(.on), .seg .more:hover:not(.on) { color: var(--pearl); background: rgba(216, 180, 226, .1); }
+.seg button.on, .seg .more.on { background: rgba(216, 180, 226, .32); color: var(--pearl); }
+.cu-srv { border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; margin-bottom: 10px; background: rgba(255, 255, 255, .02); }
+.cu-srv.editing { border-color: rgba(216, 180, 226, .45); background: rgba(216, 180, 226, .05); }
+.cu-srv-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.cu-srv-head .name { font-size: 16px; font-weight: 600; color: var(--pearl); overflow-wrap: anywhere; }
+.cu-srv-head .addr { font-size: 12.5px; color: var(--faint); flex: 1; min-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cu-srv-head .acts { display: flex; gap: 8px; margin-left: auto; }
+.cu-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; font-size: 13px; color: var(--muted); }
+.cu-meta .bad { color: var(--err); overflow-wrap: anywhere; }
+.tag.keep { text-transform: none; letter-spacing: .04em; }
+.cu-models .inner { display: flex; flex-direction: column; padding: 4px 14px 12px; }
+.cu-mrow { display: flex; gap: 12px; align-items: baseline; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+.cu-mrow .mono { color: var(--pearl); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cu-mrow .card-hint { white-space: nowrap; margin: 0; }
+.cu-hand { margin-top: 10px; }
+.cu-edit { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; }
+.cu-key { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 9px 12px; border: 1px solid rgba(216, 180, 226, .28); border-radius: 10px; background: rgba(216, 180, 226, .04); }
+.cu-key .lbl { font-size: 11px; font-weight: 600; letter-spacing: .18em; text-transform: uppercase; color: var(--muted); }
+.cu-key .val { font-size: 14px; color: var(--pearl); flex: 1; min-width: 120px; }
+.cu-key .val .mono { color: var(--primary); }
+.cu-key .val.warn { color: var(--warn); }
+.cu-key .val.muted { color: var(--faint); }
+.cu-key input { flex: 1; min-width: 160px; }
+.cu-adv { margin-top: 0; }
+.cu-adv .inner { display: flex; flex-direction: column; gap: 14px; }
+.cu-adv .field .card-hint { margin: 0; }
+.cu-edit-foot { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; border-top: 1px solid var(--line); padding-top: 12px; }
+.cu-edit-foot .spacer { flex: 1; }
+.cu-add { align-self: flex-start; margin-top: 4px; }
+.cu-hint { margin-top: 14px; }
+@container cu-roles (max-width: 640px) {
+  .cu-head { display: none; }
+  .cu-row { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "who think" "model model"; }
+  .cu-row .who { grid-area: who; }
+  .cu-row .model { grid-area: model; }
+  .cu-row .think { grid-area: think; }
+  .cu-row .think small { display: inline; }
+}
+@container cu-roles (max-width: 360px) {
+  .cu-row .think small { display: none; }
+  .cu-row .seg button, .cu-row .seg .more { padding: 6px 7px; }
+}
+@container cu-panel (max-width: 560px) {
+  .cu-srv-head .acts { width: 100%; margin-left: 0; }
+}
+
 /* smart home panel (Tools page): one card per plug, readable in Simple mode */
 .iot-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); }
 .iot-dev {

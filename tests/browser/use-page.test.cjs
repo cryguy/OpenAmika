@@ -1001,121 +1001,177 @@ async function wizardBrain(t, routes, viewport) {
 
 // The brain's custom endpoints as f_custom keeps them: every answer is the whole status. calls records what the page
 // sent; refuse answers one route with a status and the detail the gateway forwards.
+const EFFORTS = { surface: 'none', deep: 'none', reflection: 'low', memory_write: 'none' };
 function customBrain({ endpoints = [], inUse = {}, detected, refuse = {} } = {}) {
-  const state = { ok: true, endpoints: structuredClone(endpoints), in_use: inUse };
+  const state = { ok: true, endpoints: structuredClone(endpoints), in_use: structuredClone(inUse) };
   const calls = [];
   const handle = name => async route => {
     const request = route.request();
     const body = request.method() === 'POST' ? request.postDataJSON() : null;
     calls.push({ name, action: request.headers()['x-build-f-action'] || null, body });
     if (refuse[name]) return route.fulfill({ status: refuse[name][0], json: { detail: refuse[name][1] } });
-    const endpoint = state.endpoints.find(e => e.id === body?.id);
-    if (name === 'endpoint' && endpoint) Object.assign(endpoint, { name: body.name, base_url: body.base_url });
-    else if (name === 'endpoint') state.endpoints.push({ id: body.name.toLowerCase().replace(/\W+/g, '-'), name: body.name,
-      base_url: body.base_url, json_mode: 'json_object', detected_at: null, models: [],
-      key: { present: !!body.key, hint: body.key ? '…' + body.key.slice(-4) : null }, reachable: null, error: null });
-    else if (name === 'detect') Object.assign(endpoint, { models: detected ?? endpoint.models, detected_at: '2026-11-18T09:00:00+00:00', reachable: true });
+    let endpoint = state.endpoints.find(e => e.id === body?.id);
+    if (name === 'endpoint') {
+      if (!endpoint) state.endpoints.push(endpoint = { id: body.name.toLowerCase().replace(/\W+/g, '-'), detected_at: null,
+        models: [], key: { present: false, hint: null }, reasoning_effort: { ...EFFORTS }, reachable: null, error: null });
+      Object.assign(endpoint, { name: body.name, base_url: body.base_url, json_mode: body.json_mode, reasoning_switch: body.reasoning_switch,
+        reachable: null });
+      if (body.key) endpoint.key = { present: true, hint: '…' + body.key.slice(-4) };
+      if (body.clear_key) endpoint.key = { present: false, hint: null };
+    } else if (name === 'detect') Object.assign(endpoint, { models: detected ?? endpoint.models, detected_at: '2026-11-18T09:00:00+00:00', reachable: true });
     else if (name === 'model') endpoint.models.push({ name: body.name, context_length: null, kind: 'chat', source: 'manual' });
-    else if (name === 'use') return route.fulfill({ json: { ok: true, selections: {}, transport: {}, in_use: {} } });
+    else if (name === 'use') {
+      for (const [role, pick] of Object.entries(body.roles)) {
+        state.in_use[role] = { endpoint: pick.endpoint, model: pick.model };
+        if ('effort' in pick) state.endpoints.find(e => e.id === pick.endpoint).reasoning_effort[role] = pick.effort;
+      }
+      return route.fulfill({ json: { ok: true, selections: {}, transport: 'mixed', in_use: state.in_use, endpoints: state.endpoints } });
+    }
     return route.fulfill({ json: state });
   };
-  return { calls, posted: () => calls.filter(c => c.body).map(c => [c.action, c.body]),
+  return { calls, state, posted: () => calls.filter(c => c.body).map(c => [c.action, c.body]),
     routes: Object.fromEntries(['status', 'endpoint', 'detect', 'model', 'use'].map(name =>
       ['**/api/build_f/custom' + (name === 'status' ? '' : '/' + name), handle(name)])) };
 }
+const ROLES = ['surface', 'deep', 'reflection', 'memory_write'];
 const customModel = (name, context_length, kind = 'chat') => ({ name, context_length, kind, source: 'detected' });
+const pick = (endpoint, model) => JSON.stringify([endpoint, model]);
 const toastText = p => p.waitForFunction(() => document.querySelector('.oa-toast.show')?.textContent).then(h => h.jsonValue());
+const roleRow = (p, role) => p.locator(`.oa-wizard .cu-row[data-role="${role}"]`);
 
-test('the first-run brain step offers Custom; Connect saves the endpoint, detects it, and lists chat models only', async t => {
+test('the first-run brain step offers Custom; Connect saves the server, asks for its models, and offers chat models only', async t => {
   const brain = customBrain({ detected: [customModel('qwen3-32b', 32768), customModel('nomic-embed-text', 2048, 'embedding'),
     customModel('tiny-chat', 4096)] });
   const p = await wizardBrain(t, brain.routes);
   assert.deepEqual(await p.locator('.oa-wizard .prov b').allTextContents(), ['OpenRouter', 'Ollama', 'Custom']);
   await p.getByRole('button', { name: /^Custom/ }).click();
   assert.equal(await p.getByRole('button', { name: /^Custom/ }).getAttribute('aria-pressed'), 'true');
-  assert.match(await p.locator('.oa-wizard p.hint:visible').last().textContent(), /^Her prompts take about 8k tokens/);
+  assert.equal(await p.locator('.oa-wizard .cu-srv.editing .name').textContent(), 'Your server');
+  assert.equal(await p.getByRole('button', { name: 'Cancel' }).count(), 0, 'the first server has nothing to go back to');
+  assert.equal(await p.locator('.oa-wizard .cu-roles').count(), 0, 'no roles before a model is known');
   await p.getByPlaceholder('http://127.0.0.1:1234/v1').fill('http://10.0.0.5:8000/v1');
-  await p.getByPlaceholder('only if the server asks for one').fill('gsk_test_key_1234');
+  await p.getByRole('button', { name: 'Add a key' }).click();
+  assert.equal(await p.evaluate(() => document.activeElement.placeholder), 'paste the key');
+  await p.keyboard.type('gsk_test_key_1234');
   await p.getByRole('button', { name: 'Connect' }).click();
-  assert.equal(await toastText(p), '2 chat model(s) found.');
+  assert.equal(await toastText(p), '2 chat models at My server.');
   assert.deepEqual(brain.posted(), [
-    ['custom-endpoint', { name: 'My server', base_url: 'http://10.0.0.5:8000/v1', key: 'gsk_test_key_1234' }],
+    ['custom-endpoint', { name: 'My server', base_url: 'http://10.0.0.5:8000/v1', json_mode: 'json_object', reasoning_switch: 'none',
+      key: 'gsk_test_key_1234' }],
     ['custom-detect', { id: 'my-server' }],
   ]);
-  assert.equal(await p.getByPlaceholder('saved …1234 · empty keeps it').inputValue(), '', 'the key leaves the form once saved');
-  const select = p.locator('.oa-wizard select:visible');
-  assert.deepEqual(await select.evaluate(s => [...s.options].map(o => o.value)), ['qwen3-32b', 'tiny-chat']);
-  await select.selectOption('tiny-chat');
-  const warning = p.locator('.oa-wizard p.hint:visible').last();
-  assert.match(await warning.textContent(),
-    /^tiny-chat's context window is 4\D?096 tokens; her prompts take about 8k plus the answer: use 16k or more\.$/);
-  assert.equal(await warning.evaluate(e => e.style.color), 'var(--err)');
-  await p.getByRole('button', { name: 'Use this model' }).click();
-  await p.waitForFunction(() => document.querySelector('.oa-toast.show.err')?.textContent.includes("tiny-chat's context window"));
-  assert.deepEqual(brain.posted().at(-1), ['custom-use', { endpoint: 'my-server', model: 'tiny-chat' }]);
+  assert.equal(await p.locator('.oa-wizard .cu-panel input[type="password"]').count(), 0, 'the key leaves the page once saved');
+  assert.deepEqual(await p.locator('.oa-wizard .cu-srv .tag').allTextContents(), ['key …1234', '2 models']);
+  const all = p.getByRole('combobox', { name: 'Set all four roles to' });
+  assert.deepEqual(await all.evaluate(s => [...s.options].map(o => o.textContent)),
+    ['— pick a model —', 'qwen3-32b · My server · 32k', 'tiny-chat · My server · 4k']);
+  assert.equal(await roleRow(p, 'deep').locator('select').inputValue(), '', 'a role not on the server stays where it is');
+  assert.equal(await roleRow(p, 'deep').locator('select option').first().textContent(), 'another provider · stays');
+  assert.equal(await roleRow(p, 'deep').locator('.think').textContent(), 'Thinking—');
+  await all.selectOption(pick('my-server', 'tiny-chat'));
+  // the server is told no thinking setting until Edit says how: the roles say so
+  assert.equal(await roleRow(p, 'deep').locator('.think').textContent(), 'Thinkingserver decides');
+  assert.equal(await p.locator('.oa-wizard .cu-foot .card-hint').textContent(), '4 roles changed · not used yet');
+  assert.match(await roleRow(p, 'surface').locator('.warn').textContent(),
+    /^tiny-chat's context window is 4,096 tokens; her prompts take about 8k plus the answer: use a model or server setting of 16k or more\.$/);
+  await p.getByRole('button', { name: 'Use these' }).click();
+  await p.waitForFunction(() => document.querySelector('.oa-toast.show.err')?.textContent.startsWith('Now running: Surface → tiny-chat, Deep → tiny-chat'));
+  assert.deepEqual(brain.posted().at(-1), ['custom-use', { roles: Object.fromEntries(ROLES.map(r => [r, { endpoint: 'my-server', model: 'tiny-chat' }])) }]);
+  assert.equal(await p.locator('.oa-wizard .cu-foot .card-hint').textContent(), 'This is what she runs now.');
+  assert.equal(await p.getByRole('button', { name: 'Use these' }).isDisabled(), true);
 });
 
-test('a refused detect shows its sentence; a server that lists no chat models takes a typed model id', async t => {
+test('a refused detect shows its sentence on the server; a model typed by hand can take a role, the others stay', async t => {
   const sentence = 'My server (http://10.0.0.5:8000/v1): The server refused the key (HTTP 401): invalid api key';
   const brain = customBrain({ refuse: { detect: [400, sentence] } });
-  const p = await wizardBrain(t, brain.routes);
+  const p = await wizardBrain(t, { ...brain.routes, '**/api/build_f/models': route => route.fulfill({ json: {
+    selections: Object.fromEntries(ROLES.map(r => [r, r + ':or'])),
+    options: Object.fromEntries(ROLES.map(r => [r, [{ key: r + ':or', name: 'GLM-5 (StreamLake fp8)', transport: 'openrouter' }]])),
+  } }) });
   await p.getByRole('button', { name: /^Custom/ }).click();
   await p.getByPlaceholder('http://127.0.0.1:1234/v1').fill('http://10.0.0.5:8000/v1');
   await p.getByRole('button', { name: 'Connect' }).click();
   assert.equal(await toastText(p), sentence);
-  assert.equal(await p.locator('.oa-wizard .card-hint:visible', { hasText: sentence }).count(), 1);
-  assert.equal(await p.getByRole('button', { name: 'Use this model' }).isDisabled(), true);
-  await p.getByPlaceholder('e.g. qwen3-32b').fill('my-model');
-  await p.getByRole('button', { name: 'Add model' }).click();
-  await p.waitForFunction(() => document.querySelector('.oa-toast.show')?.textContent === 'my-model added.');
+  assert.equal(await p.locator('.oa-wizard .cu-meta .bad').textContent(), sentence);
+  assert.equal(await p.locator('.oa-wizard .cu-srv .dot').getAttribute('class'), 'dot err');
+  await p.getByPlaceholder('its id as the server knows it').fill('my-model');
+  await p.keyboard.press('Enter');
+  await p.waitForFunction(() => document.querySelector('.oa-toast.show')?.textContent === 'my-model added: pick it for a role above.');
   assert.deepEqual(brain.posted().at(-1), ['custom-model', { id: 'my-server', name: 'my-model' }]);
-  assert.equal(await p.locator('.oa-wizard select:visible').inputValue(), 'my-model');
-  assert.equal(await p.getByPlaceholder('e.g. qwen3-32b').isHidden(), true);
-  await p.getByRole('button', { name: 'Use this model' }).click();
-  await p.waitForFunction(() => document.querySelector('.oa-toast.show')?.textContent === 'My server: my-model.');
-  assert.deepEqual(brain.posted().at(-1), ['custom-use', { endpoint: 'my-server', model: 'my-model' }]);
+  assert.equal(await roleRow(p, 'surface').locator('select option').first().textContent(), 'GLM-5 (StreamLake fp8) · stays');
+  await roleRow(p, 'deep').locator('select').selectOption(pick('my-server', 'my-model'));
+  assert.equal(await roleRow(p, 'deep').getAttribute('class'), 'cu-row changed');
+  await p.getByRole('button', { name: 'Undo' }).click();
+  assert.equal(await roleRow(p, 'deep').locator('select').inputValue(), '');
+  await roleRow(p, 'deep').locator('select').selectOption(pick('my-server', 'my-model'));
+  await p.getByRole('button', { name: 'Use these' }).click();
+  await p.waitForFunction(() => document.querySelector('.oa-toast.show')?.textContent === 'Now running: Deep → my-model.');
+  assert.deepEqual(brain.posted().at(-1), ['custom-use', { roles: { deep: { endpoint: 'my-server', model: 'my-model' } } }]);
+  assert.match(await p.locator('.oa-wizard .cu-meta').textContent(), /runs deep$/);
 });
 
-test('a wizard opened with every role on a custom endpoint starts on it, and Connect updates that endpoint', async t => {
-  const lab = { id: 'lab', name: 'Lab box', base_url: 'http://10.0.0.5:8000/v1', json_mode: 'json_schema',
-    detected_at: '2026-11-18T08:00:00+00:00', models: [customModel('llama-70b', null), customModel('qwen3-32b', 32768)],
+test('a wizard opened with every role on a custom server starts on it; the key is replaced in Edit, thinking set per role', async t => {
+  const lab = { id: 'lab', name: 'Lab box', base_url: 'http://10.0.0.5:8000/v1', json_mode: 'json_schema', reasoning_switch: 'reasoning_effort',
+    reasoning_effort: { ...EFFORTS }, detected_at: '2026-11-18T08:00:00+00:00', models: [customModel('llama-70b', null), customModel('qwen3-32b', 32768)],
     key: { present: true, hint: '…9f2c' }, reachable: true, error: null };
-  const roles = ['surface', 'deep', 'reflection', 'memory_write'];
-  const brain = customBrain({ endpoints: [lab], inUse: Object.fromEntries(roles.map(r => [r, { endpoint: 'lab', model: 'qwen3-32b' }])),
+  const brain = customBrain({ endpoints: [lab], inUse: Object.fromEntries(ROLES.map(r => [r, { endpoint: 'lab', model: 'qwen3-32b' }])),
     refuse: { use: [409, { code: 'model_busy', message: 'Model selection is busy: a reply is streaming. Wait a moment.' }] } });
   const p = await wizardBrain(t, { ...brain.routes, '**/api/build_f/models': route => route.fulfill({ json: {
-    selections: Object.fromEntries(roles.map(r => [r, r + ':custom:lab:qwen3-32b'])),
-    options: Object.fromEntries(roles.map(r => [r, [{ key: r + ':custom:lab:qwen3-32b', transport: 'custom' }]])),
+    selections: Object.fromEntries(ROLES.map(r => [r, r + ':custom:lab:qwen3-32b'])),
+    options: Object.fromEntries(ROLES.map(r => [r, [{ key: r + ':custom:lab:qwen3-32b', transport: 'custom' }]])),
   } }) });
   assert.equal(await p.getByRole('button', { name: /^Custom/ }).getAttribute('aria-pressed'), 'true');
-  await p.waitForFunction(() => [...document.querySelectorAll('.oa-wizard input')].some(i => i.value === 'Lab box'));
-  assert.equal(await p.getByPlaceholder('http://127.0.0.1:1234/v1').inputValue(), 'http://10.0.0.5:8000/v1');
-  assert.equal(await p.getByPlaceholder('saved …9f2c · empty keeps it').count(), 1);
-  assert.equal(await p.locator('.oa-wizard select:visible').inputValue(), 'qwen3-32b');
-  await p.getByRole('button', { name: 'Connect' }).click();
-  await p.waitForFunction(() => document.querySelector('.oa-toast.show')?.textContent === '2 chat model(s) found.');
+  await roleRow(p, 'deep').waitFor();
+  assert.equal(await p.getByRole('combobox', { name: 'Set all four roles to' }).inputValue(), pick('lab', 'qwen3-32b'));
+  assert.deepEqual(await p.locator('.oa-wizard .cu-row[data-role="reflection"] .seg [aria-pressed="true"]').allTextContents(), ['Low']);
+  // the key: Remove waits for Save and Undo takes it back; Replace opens an empty field
+  await p.getByRole('button', { name: 'Edit' }).click();
+  assert.equal(await p.locator('.oa-wizard .cu-key .val').textContent(), 'Saved · …9f2c');
+  await p.getByRole('button', { name: 'Remove', exact: true }).click();
+  assert.equal(await p.locator('.oa-wizard .cu-key .val').textContent(), '…9f2c is removed when you press Save');
+  await p.getByRole('button', { name: 'Undo' }).click();
+  await p.getByRole('button', { name: 'Replace' }).click();
+  await p.keyboard.type('sk-new-key-7777');
+  await p.getByRole('button', { name: 'Save' }).click();
+  await p.waitForFunction(() => document.querySelector('.oa-toast.show')?.textContent === '2 chat models at Lab box.');
   assert.deepEqual(brain.posted(), [
-    ['custom-endpoint', { id: 'lab', name: 'Lab box', base_url: 'http://10.0.0.5:8000/v1' }],
+    ['custom-endpoint', { name: 'Lab box', base_url: 'http://10.0.0.5:8000/v1', json_mode: 'json_schema', reasoning_switch: 'reasoning_effort',
+      id: 'lab', key: 'sk-new-key-7777' }],
     ['custom-detect', { id: 'lab' }],
   ]);
-  await p.getByRole('button', { name: 'Use this model' }).click();
+  assert.deepEqual(await p.locator('.oa-wizard .cu-srv .tag').allTextContents(), ['key …7777', '2 models']);
+  // thinking per role: buttons for the usual efforts, ⋯ for the rest
+  await roleRow(p, 'deep').getByRole('button', { name: 'High' }).click();
+  await roleRow(p, 'surface').getByRole('combobox', { name: 'Surface: more thinking choices' }).selectOption('');
+  assert.equal(await roleRow(p, 'surface').locator('.more').textContent().then(t => t.split('⋯')[0]), 'Server decides');
+  await roleRow(p, 'memory_write').getByRole('button', { name: 'Med' }).click();
+  assert.equal(await roleRow(p, 'memory_write').locator('.warn').textContent(),
+    "Above Low, the memory writer's thinking can use up its 6,000-token answer and cut its JSON off.");
+  assert.equal(await p.locator('.oa-wizard .cu-foot .card-hint').textContent(), '3 roles changed · not used yet');
+  await p.getByRole('button', { name: 'Use these' }).click();
   await p.waitForFunction(() => document.querySelector('.oa-toast.show.err')?.textContent === 'Model selection is busy: a reply is streaming. Wait a moment.');
-  assert.deepEqual(brain.posted().at(-1), ['custom-use', { endpoint: 'lab', model: 'qwen3-32b' }]);
+  const efforts = { surface: null, deep: 'high', reflection: 'low', memory_write: 'medium' };
+  assert.deepEqual(brain.posted().at(-1), ['custom-use', { roles: Object.fromEntries(ROLES.map(r => [r, { endpoint: 'lab', model: 'qwen3-32b', effort: efforts[r] }])) }]);
+  assert.equal(await p.locator('.oa-wizard .cu-foot .card-hint').textContent(), '3 roles changed · not used yet', 'a refused switch keeps the picks');
 });
 
 test('the Custom panel fits a phone screen without sideways scrolling', async t => {
   for (const [width, height] of [[390, 844], [320, 740]]) {
-    const brain = customBrain({ detected: [customModel('nomic-embed-text', 2048, 'embedding')] });
-    const p = await wizardBrain(t, brain.routes, { width, height });
-    await p.getByRole('button', { name: /^Custom/ }).click();
-    await p.getByPlaceholder('http://127.0.0.1:1234/v1').fill('http://192.168.100.200:12345/v1');
-    await p.getByRole('button', { name: 'Connect' }).click();
-    await p.getByPlaceholder('e.g. qwen3-32b').waitFor();
-    const fit = await p.evaluate(() => {
-      const box = document.querySelector('.oa-wizard'), edge = box.getBoundingClientRect().right;
-      return { page: document.documentElement.scrollWidth <= innerWidth, box: box.scrollWidth <= box.clientWidth,
-        inside: [...box.querySelectorAll('*')].every(e => e.getBoundingClientRect().right <= edge + 0.5) };
-    });
-    assert.deepEqual(fit, { page: true, box: true, inside: true }, `at ${width}px`);
+    for (const detected of [[customModel('nomic-embed-text', 2048, 'embedding')],
+                            [customModel('qwen2.5-coder-32b-instruct-abliterated-q4_k_m-gguf-from-a-long-list', 32768)]]) {
+      const brain = customBrain({ detected });
+      const p = await wizardBrain(t, brain.routes, { width, height });
+      await p.getByRole('button', { name: /^Custom/ }).click();
+      await p.getByPlaceholder('http://127.0.0.1:1234/v1').fill('http://192.168.100.200:12345/v1');
+      await p.getByRole('button', { name: 'Connect' }).click();
+      await p.locator('.oa-wizard .cu-srv:not(.editing)').waitFor();
+      if (detected[0].kind === 'chat') await p.locator('.oa-wizard .cu-roles').waitFor();
+      const fit = await p.evaluate(() => {
+        const box = document.querySelector('.oa-wizard'), edge = box.getBoundingClientRect().right;
+        return { page: document.documentElement.scrollWidth <= innerWidth, box: box.scrollWidth <= box.clientWidth,
+          inside: [...box.querySelectorAll('*')].every(e => e.getBoundingClientRect().right <= edge + 0.5) };
+      });
+      assert.deepEqual(fit, { page: true, box: true, inside: true }, `at ${width}px, ${detected[0].kind} model`);
+    }
   }
 });

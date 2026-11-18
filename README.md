@@ -339,8 +339,9 @@ GPU memory). Attach it when you ask on [Discord](https://discord.gg/mekahime) or
   27B or more, see [Which language model?](#which-language-model)), then on the Setup page choose Brain → Ollama →
   Detect models → Use this model. No key needed. For Ollama on another PC, type its address there before Detect models.
 - **Your own server**: on the Setup page choose Brain → Custom, give it a name, its address (for example
-  `http://127.0.0.1:1234/v1` for LM Studio) and a key if it needs one, Save (it reads the server's models), pick one
-  → Use this model. Give the model a context window of 16k tokens or more on the server; her prompts are about 8k.
+  `http://127.0.0.1:1234/v1` for LM Studio) and a key if it needs one, Connect (it reads the server's models), pick a
+  model for her roles → Use these. Give the model a context window of 16k tokens or more on the server; her prompts
+  are about 8k.
 - **Her helpers**: Hermes Agent or nanoMuse run errands for her, and her desk view shows what they do
   ([below](#her-helpers-hermes-and-nanomuse)). Any other MCP server works too, on the Tools page
   ([docs/TOOLS.md](docs/TOOLS.md)).

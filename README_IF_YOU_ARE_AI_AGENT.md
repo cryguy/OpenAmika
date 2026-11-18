@@ -570,9 +570,11 @@ Invoke-RestMethod -Method Post -Uri "$page/api/build_f/ollama/use" -ContentType 
   mixture of experts, is exempt). It is a warning, not a refusal, and nothing checks her replies by script.
 
 **Custom endpoints.** Any server that speaks the OpenAI chat-completions API, each with its own address and key, any
-number of them, mixed per role with the others (`brain/f_custom.py`). On the page: Setup → Brain → Custom → name,
-address, key when the server needs one → Save (it reads the server's models) → pick a model → Use this model (all
-four roles; Professional mode mixes per role); the first-run wizard offers the same. Headless, with her running (same
+number of them, mixed per role with the others (`brain/f_custom.py`). On the page (`ui/custom.js`, the same panel in
+Setup → Brain → Custom and in the first-run wizard): a server's name, address and key when it needs one → Connect
+(it reads the server's models); then, per role, a model and how hard it thinks (Set all four to: one model for all) →
+Use these; a role left on OpenRouter or Ollama stays there. Edit on a server changes its address, its key (Replace or
+Remove, done on Save) and, under Advanced, its JSON mode and thinking switch. Headless, with her running (same
 `Origin` and `X-Build-F-Action` rule as above):
 
 ```powershell
