@@ -331,12 +331,14 @@ def http_json(url, timeout=2):
 
 def http_get_status(url, headers, timeout=5):
     """(status, JSON payload or None) of a GET over http(s) that follows no redirect, so a key in headers never
-    reaches another address; status 0 when nothing answered."""
+    reaches another address; status 0 when nothing answered. It names itself: firewalls in front of hosted servers
+    (Cloudflare's error 1010) refuse urllib's default User-Agent with a 403 that would read as a refused key."""
     opener = OpenerDirector()
     for handler in (HTTPHandler(), HTTPSHandler(), UnknownHandler()):
         opener.add_handler(handler)
     try:
-        with opener.open(Request(url, headers=headers), timeout=timeout) as response:
+        request = Request(url, headers={'User-Agent': f'{APP}-launcher', **headers})
+        with opener.open(request, timeout=timeout) as response:
             status, body = response.status, response.read()
     except Exception:
         return 0, None
@@ -606,9 +608,13 @@ def custom_checks():
             out.append(('err', label, f'not answering at {base} — start it, or fix its address on Setup → Brain; '
                                       f'{runs}'))
             continue
-        if status in (401, 403):
+        if status == 401:
             out.append(('err', label, ('refused the key — paste it again on Setup → Brain' if key else
                                        'asks for a key — paste it on Setup → Brain') + f'; {runs}'))
+            continue
+        if status == 403:
+            out.append(('err', label, f'refused this request (HTTP 403): the key may not be allowed to list models, '
+                                      f'or a firewall in front of {base} blocks it; {runs}'))
             continue
         if 300 <= status < 400:
             out.append(('err', label, f'{base} redirects elsewhere (HTTP {status}) and she follows no redirect — put '

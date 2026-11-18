@@ -629,7 +629,10 @@ Invoke-RestMethod -Method Post -Uri "$page/api/build_f/custom/use" -ContentType 
   (Setup → Brain)` (or `on Ollama or your own endpoints`), `OK LM Studio  12 models at http://127.0.0.1:1234/v1`, `OK
   LM Studio model qwen3-32b  listed · surface, deep, reflection, memory_write`, or `!! LM Studio  not answering at … —
   start it, or fix its address on Setup → Brain; …` / `!! LM Studio  refused the key — paste it again on Setup →
-  Brain; …` / `-- LM Studio model … not listed by the server — …` (a warning: some servers serve more than they list).
+  Brain; …` (HTTP 401) / `!! LM Studio  refused this request (HTTP 403): the key may not be allowed to list models, or
+  a firewall in front of … blocks it; …` / `-- LM Studio model … not listed by the server — …` (a warning: some servers
+  serve more than they list). The check sends `User-Agent: OpenAmika-launcher`: Cloudflare in front of a hosted server
+  refuses urllib's default one (error 1010).
 
 **A model that left OpenRouter's catalog.** After its boot-time resume the brain reads OpenRouter's public model
 list (`/api/v1/models`) once, then at most every 30 minutes when a page asks: `GET /api/build_f/openrouter/catalog` →

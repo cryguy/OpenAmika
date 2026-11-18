@@ -298,6 +298,29 @@ def test_a_custom_endpoint_key_is_sent_only_as_its_bearer_and_never_shown(fresh,
     assert "gsk_" not in json.dumps([right, wrong, none])
 
 
+def test_a_custom_endpoint_check_names_itself_and_tells_a_403_from_a_refused_key(fresh, monkeypatch):
+    port = free_port()
+    picks = {role: f"{role}:custom:router:glm-5" for role in ("surface", "deep", "reflection", "memory_write")}
+    run = custom_setup(fresh, monkeypatch, picks, [endpoint("router", "Router", port)],
+                       env="CUSTOM_LLM_KEY_ROUTER=sk-test-123456\n")
+    agents, firewall = [], [False]
+
+    def models(headers):
+        agents.append(headers.get("User-Agent") or "")
+        if firewall[0] or agents[-1].startswith("Python-urllib"):     # what Cloudflare's error 1010 does
+            return 403, "error code: 1010"
+        return 200, {"data": [{"id": "glm-5"}]}
+    with serve(port, {"/v1/models": models}):
+        fine = run()
+        firewall[0] = True
+        blocked = run()
+    assert fine["Router"] == ("ok", f"1 model at http://127.0.0.1:{port}/v1")
+    assert agents[0] == "OpenAmika-launcher"
+    assert blocked["Router"] == ("err", "refused this request (HTTP 403): the key may not be allowed to list models, "
+                                        f"or a firewall in front of http://127.0.0.1:{port}/v1 blocks it; "
+                                        "deep, memory_write, reflection, surface run on it")
+
+
 def test_a_custom_endpoint_key_never_follows_a_redirect(fresh, monkeypatch):
     port, elsewhere, key = free_port(), free_port(), "sk-" + "r" * 40
     picks = {role: f"{role}:custom:proxy:llama-3.3-70b" for role in ("surface", "deep", "reflection", "memory_write")}
