@@ -20,7 +20,7 @@ Interactive version: open **/flow** in the running app (pan/zoom node map with f
 │  surface/deep/reflection      │        │  tts_request_gateway→audio_ready │
 │  prompts (cache-first)        │        └──────────────────────────────────┘
 │  evidence memory (memory_f/)  │
-│  usage ledger + settlement    │──► OpenRouter / Alibaba Model Studio / Ollama (LLMs)
+│  usage ledger + settlement    │──► OpenRouter / Alibaba Model Studio / Ollama / custom endpoints (LLMs)
 │  tools layer (f_tools, MCP) ──┼──► MCP servers over stdio/HTTP:
 └───────┬───────────────────────┘      · servers/openamika-agents ─HTTP─► Hermes Agent :8642
         │                              │                         └HTTP─► nanoMuse :8787

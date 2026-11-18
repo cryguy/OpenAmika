@@ -31,10 +31,10 @@ ever disagree, the code wins, and you should fix this file in the same change.
    never put a token on a command line that ends up in a log (prefer environment variables). `.gitignore` already
    excludes every such file; never `git add -f` one.
 5. **Never commit machine-local state**: `settings.json`, `envs/`, `logs/`, `memory_f/`, `brain/memories/`,
-   `config/ollama.json`, `config/seed.json`, `config/voice_map.json`, `avatar/models/*` (except its README),
-   `speech/models/*` (except `DOWNLOAD.md`), `vendor/tts-engine/*` (except `main.py`, `requirements-tts.txt`,
-   `README.md`, `LICENSE`, `THIRD_PARTY_NOTICES.md`). After onboarding, `config/build_f.json` and
-   `config/word_replace.json` hold the person's name and city: do not commit those changes to a public fork.
+   `config/ollama.json`, `config/custom_llm.json`, `config/seed.json`, `config/voice_map.json`, `avatar/models/*`
+   (except its README), `speech/models/*` (except `DOWNLOAD.md`), `vendor/tts-engine/*` (except `main.py`,
+   `requirements-tts.txt`, `README.md`, `LICENSE`, `THIRD_PARTY_NOTICES.md`). After onboarding, `config/build_f.json`
+   and `config/word_replace.json` hold the person's name and city: do not commit those changes to a public fork.
 6. **Do not disturb a running stack.** Her default ports are 53000, 5202, 8011, 8002, 8014 and 5215, her helpers'
    8642 (Hermes Agent) and 8787 (nanoMuse) (§2); a port Windows reserved has been moved by the launcher (read
    `settings.json`, never assume the default). To inspect,
@@ -119,7 +119,7 @@ everything this launcher started. Every process binds 127.0.0.1.
 |---|---|---|---|---|---|
 | launcher | `launch.py` | `envs/brain` | – | – | starts and watches the rest; writes `logs/` |
 | speech gateway | `speech/api.py` (FastAPI) | `envs/speech` (torch 2.10.0 + torchaudio, CUDA 12.8) | 53000 (`chat_port`) | `GET /health` | the browser (pages, `WS /ws/dialog`), the brain (Socket.IO client, `HANE_URL`), the voice server (Socket.IO client, `tts_url`), vision (`GET /api/latest`; relays camera frames on `WS /ws/vlm_feed`), messengers (`GET /api/status`) |
-| brain | `brain/webui.py` (Flask-SocketIO) | `envs/brain` (no torch) | 5202 (`brain_port`) | `GET /api/evo/health` | OpenRouter / Alibaba Model Studio / Ollama (LLM roles), the embedder (`POST /embed`), MCP servers (tools) |
+| brain | `brain/webui.py` (Flask-SocketIO) | `envs/brain` (no torch) | 5202 (`brain_port`) | `GET /api/evo/health` | OpenRouter / Alibaba Model Studio / Ollama / custom OpenAI-compatible endpoints (LLM roles), the embedder (`POST /embed`), MCP servers (tools) |
 | embedder | `brain/embed_server.py` | `envs/embed` (torch 2.10.0, sentence-transformers) | 8011 (`embedder.port`) | `GET /health` | – (BAAI/bge-m3, cut to 768 dims) |
 | vision (her eyes) | `vision/vlm_service.py` | `envs/vision` (torch 2.10.0 + torchvision 0.25.0, transformers) | 8014 (`vision.port`) | `GET /api/health` | speech (`ws://127.0.0.1:53000/ws/vlm_feed`); only when `vision.enabled` |
 | messengers | `messengers/service.py` | `envs/speech` | 5215 (`messengers_port`) | `GET /health` | the brain (Socket.IO), Discord / Telegram |
@@ -168,7 +168,7 @@ and the interactive map at `/flow`. Socket protocol: [brain/PROTOCOL.md](brain/P
 | `brain/f_bridge.py` | the live integration: memory store, role transports, usage ledger, settlement |
 | `brain/f_memory.py`, `f_method.py`, `f_extract.py`, `methods.py` | evidence memory: quoted facts and original speech (no summaries), hybrid BM25 + embedding recall, extraction schema |
 | `brain/f_roles.py`, `config/llm_roles.json` | the four LLM roles, presets, validated selections |
-| `brain/f_openrouter.py`, `brain/f_ollama.py` | metered OpenRouter / Alibaba transports; the Ollama transport (`config/ollama.json`) |
+| `brain/f_openrouter.py`, `brain/f_ollama.py`, `brain/f_custom.py` | metered OpenRouter / Alibaba transports; the Ollama transport (`config/ollama.json`); custom OpenAI-compatible endpoints (`config/custom_llm.json`, keys in `brain/.env`) |
 | `brain/f_usage.py`, `f_settle.py`, `f_controls.py`, `config/pricing.json` | per-call usage ledger (`retire_dead`: requests no running work will finish), cost settlement, model and meter controls, Unlock, the silence-remarks setting |
 | `brain/f_persona.py` | Setup page persona editing and the OpenRouter key endpoint (writes `brain/.env`) |
 | `brain/f_reset.py` | wipe her memory / reset everything (with backups): one short wait (`wait_s`), `force`, the busy reasons in words; `wipe_offline` for `launch.py --wipe-memory` while she is not running |
@@ -431,7 +431,7 @@ Done. Next:  .\Start_OpenAmika.bat   (or double-click it: her voice server start
 
 ### 5.4 Her brain's LLM
 
-Her ears, voice, memory and eyes always run on the PC; the four LLM roles (§1) run one of two ways. Recommend the
+Her ears, voice, memory and eyes always run on the PC; the four LLM roles (§1) run one of these ways. Recommend the
 first: in almost all cases it is the better setup, and it costs a few dollars a month.
 
 - **Semi-Local (the default, recommended)**: the roles run on OpenRouter with the person's own key and the models
@@ -448,6 +448,9 @@ first: in almost all cases it is the better setup, and it costs a few dollars a 
   so after the person interrupts her, or while she saves a memory or reflects, a reply can take 5–50 s (*How fast*,
   below). Do not set the person up on one because it is what fits their GPU: recommend Semi-Local, or Ollama on a
   second machine, instead.
+- **Custom endpoints**: any server that speaks the OpenAI chat-completions API (LM Studio, vLLM, llama.cpp, Groq,
+  DeepSeek, a self-hosted router), on this PC, the network or the internet, with its own key or none (below). The
+  27B rule holds for these models too.
 
 Check: `launch.py --check` shows `OK API keys …` or `-- API keys  no OpenRouter key yet …`.
 
@@ -566,6 +569,60 @@ Invoke-RestMethod -Method Post -Uri "$page/api/build_f/ollama/use" -ContentType 
   for a model under 27B parameters (Ollama's `parameter_size`, else the size in its name; `gemma4:26b`, the tested
   mixture of experts, is exempt). It is a warning, not a refusal, and nothing checks her replies by script.
 
+**Custom endpoints.** Any server that speaks the OpenAI chat-completions API, each with its own address and key, any
+number of them, mixed per role with the others (`brain/f_custom.py`). On the page: Setup → Brain → Custom → name,
+address, key when the server needs one → Save (it reads the server's models) → pick a model → Use this model (all
+four roles; Professional mode mixes per role); the first-run wizard offers the same. Headless, with her running (same
+`Origin` and `X-Build-F-Action` rule as above):
+
+```powershell
+$page = "http://localhost:53000"                                   # chat_port
+Invoke-RestMethod -Method Post -Uri "$page/api/build_f/custom/endpoint" -ContentType "application/json" `
+  -Headers @{ Origin = $page; "X-Build-F-Action" = "custom-endpoint" } `
+  -Body '{"name": "LM Studio", "base_url": "http://127.0.0.1:1234/v1", "json_mode": "json_schema"}'
+Invoke-RestMethod -Method Post -Uri "$page/api/build_f/custom/detect" -ContentType "application/json" `
+  -Headers @{ Origin = $page; "X-Build-F-Action" = "custom-detect" } -Body '{"id": "lm-studio"}'
+Invoke-RestMethod -Method Post -Uri "$page/api/build_f/custom/use" -ContentType "application/json" `
+  -Headers @{ Origin = $page; "X-Build-F-Action" = "custom-use" } `
+  -Body '{"endpoint": "lm-studio", "model": "qwen3-32b"}'
+```
+
+- `endpoint` adds (no `id`: the id comes from the name, `lm-studio`, then `lm-studio-2` …), changes (`id`) or removes
+  (`"remove": true`) one; `"key": "…"` saves its key, `"clear_key": true` removes it. `detect` reads
+  `GET <base_url>/models` (`data[].id`, and the context window where the server lists one: `context_length`,
+  `context_window` or `max_model_len`). `model` adds a model by hand for a server without that route (`{"id", "name"}`)
+  or removes one (`"remove": true`). `use` takes `{"endpoint", "model"}` for all four roles, or `{"roles": {"<role>":
+  {"endpoint", "model"}}}`; `GET /api/build_f/custom` lists the endpoints, their models, whether a key is saved (its
+  last four characters) and whether each answers.
+- Files: `config/custom_llm.json` (git-ignored): `{"endpoints": [{"id", "name", "base_url", "json_mode", "models":
+  [{"name", "context_length", "kind", "source"}], "detected_at"}]}`; the key only in `brain/.env` as
+  `CUSTOM_LLM_KEY_<ID>` (the id upper-cased, `-` as `_`), read when a call is made, sent as a bearer header to that
+  endpoint's own address and never along a redirect; the selections in `config/llm_roles.json` as
+  `"<role>:custom:<id>:<model>"`, for example `"deep": "deep:custom:lm-studio:qwen3-32b"`.
+- What she sends: the messages, `max_tokens` (the Ollama caps: surface 400, deep 1,500, reflection 3,000, memory
+  writer 6,000) and `stream_options.include_usage`; no thinking switch and no context size, since the OpenAI API has
+  neither. The server sets the context window when it loads the model: give it 16k tokens or more (LM Studio: Context
+  Length; llama.cpp: `-c 16384`; vLLM: `--max-model-len 16384`); her prompts are ~8k. The memory writer asks for JSON
+  the way the endpoint's `json_mode` says: `json_object` (the default), `json_schema` (the strict fact schema; LM Studio
+  takes only this one) or `none`. `<think>…</think>` blocks that a server without a reasoning parser streams inside
+  the answer are cut out of what she says and of the writer's JSON; a separate `reasoning_content` is never read.
+- What is offered: chat models only (an id containing `embed` is an embedding model), and for a role only when the
+  known context window is larger than its answer cap and the usage ledger can record the name (ASCII letters, digits,
+  spaces and `. _ - : / @ +`). A detect keeps the models her roles use even when the server stops listing them (some
+  list only what they have loaded); removing an endpoint or a model a role uses is refused.
+- Cost: not tracked. Calls are counted with their tokens at $0 (provider `custom` in the ledger); the cache share
+  counts only calls whose server reports `cached_tokens`. A server that reports no usage at all still works (the
+  receipt says `usage_not_reported`).
+- Refusals: no `Origin` → 403; a wrong address, a refused key, a redirect or an answer that is not a model list → 400
+  with the server's own words (`LM Studio (http://…/v1): The server refused the key (HTTP 401): …`); nothing answering
+  → 503 `Nothing is answering at http://…/v1 — is the server running? …`; `use` with a model that cannot serve the
+  role → 400 saying why; while she speaks or writes memory → the same 409 as Ollama's switch.
+- Check: `launch.py --check` reads `OK API keys  no OpenRouter key, none needed: every role runs on your own endpoints
+  (Setup → Brain)` (or `on Ollama or your own endpoints`), `OK LM Studio  12 models at http://127.0.0.1:1234/v1`, `OK
+  LM Studio model qwen3-32b  listed · surface, deep, reflection, memory_write`, or `!! LM Studio  not answering at … —
+  start it, or fix its address on Setup → Brain; …` / `!! LM Studio  refused the key — paste it again on Setup →
+  Brain; …` / `-- LM Studio model … not listed by the server — …` (a warning: some servers serve more than they list).
+
 **A model that left OpenRouter's catalog.** After its boot-time resume the brain reads OpenRouter's public model
 list (`/api/v1/models`) once, then at most every 30 minutes when a page asks: `GET /api/build_f/openrouter/catalog` →
 `{checked, checked_at, missing: [{role, model}], preset, preset_missing, error}`. A missing model is logged (`[models]
@@ -661,17 +718,18 @@ ledger's open rows retired); a port held by something that does not answer like 
 
 ### 5.7 Updating
 
-The person's way: stop her, double-click `Update_OpenAmika.bat` (README "Updating her"). `scripts/update_openamika.ps1`
-refuses while any of this folder's processes runs (`She is running. Stop her first …`, exit 1), zips `memory_f/`,
-`brain/memories/`, `settings.json`, `brain/.env`, `config/seed.json`, `ollama.json`, `voice_map.json`, `tools.json`,
-`messengers.json`, `build_f.json`, `word_replace.json`, `llm_roles.json`, `brain/*.txt` and `scenes.json` into
-`backups/update-<yyyyMMdd-HHmm>.zip` (git-ignored), runs `git stash`, `git pull --ff-only`, `git stash pop` (a file
-both sides changed keeps the person's version, `git checkout --theirs`, and the stash entry stays; the update's
-persona text is in `brain/defaults/`), then `setup_windows.ps1 --check` and `setup_tts.py --verify`, and the setups
-for real when either finds something new; the window waits for a key. A folder that is not a git clone (the ZIP) gets
-the ZIP steps (exit 2): unzip the new ZIP next to the old folder, copy `memory_f`, `brain\memories`, `settings.json`,
-`brain\.env` and the five git-ignored `config` files into it, run both setups there, start her. Nothing in the setups
-writes into `memory_f/` or `brain/memories/` (a test keeps it so). By hand, the same:
+The person's way: stop her, double-click `Update_OpenAmika.bat` (README "Updating her").
+`scripts/update_openamika.ps1` refuses while any of this folder's processes runs (`She is running. Stop her first …`,
+exit 1), zips `memory_f/`, `brain/memories/`, `settings.json`, `brain/.env`, `config/seed.json`, `ollama.json`,
+`custom_llm.json`, `voice_map.json`, `tools.json`, `messengers.json`, `build_f.json`, `word_replace.json`,
+`llm_roles.json`, `brain/*.txt` and `scenes.json` into `backups/update-<yyyyMMdd-HHmm>.zip` (git-ignored), runs `git
+stash`, `git pull --ff-only`, `git stash pop` (a file both sides changed keeps the person's version, `git checkout
+--theirs`, and the stash entry stays; the update's persona text is in `brain/defaults/`), then `setup_windows.ps1
+--check` and `setup_tts.py --verify`, and the setups for real when either finds something new; the window waits for a
+key. A folder that is not a git clone (the ZIP) gets the ZIP steps (exit 2): unzip the new ZIP next to the old folder,
+copy `memory_f`, `brain\memories`, `settings.json`, `brain\.env` and the six git-ignored `config` files into it, run
+both setups there, start her. Nothing in the setups writes into `memory_f/` or `brain/memories/` (a test keeps it so).
+By hand, the same:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File Stop_OpenAmika.ps1   # stop her first (or Ctrl+C in her console)
@@ -718,21 +776,23 @@ adds), the file is left with conflict markers and is not JSON any more.
 | `services.mqtt`, `services.zigbee2mqtt` | disabled | the smart home (§8; the person enables them) |
 
 **`brain/.env`** (from `.env.example`; secrets only): `OPENROUTER_API_KEY` (the default provider of all four roles;
-not needed when every role is on Ollama); optional `DASHSCOPE_API_KEY` / `DASHSCOPE_BASE_URL` (Alibaba Model Studio,
-workspace in `config/alibaba_models.json`), `GEMINI_API_KEY` (legacy embedder), `GROQ_API_KEY`, `CEREBRAS_API_KEY`,
-`XAI_API_KEY`, `ANTHROPIC_API_KEY` (legacy direct providers, off by default).
+not needed when every role is on Ollama or custom endpoints); `CUSTOM_LLM_KEY_<ID>` (one per custom endpoint that
+needs a key, written by Setup → Brain → Custom); optional `DASHSCOPE_API_KEY` / `DASHSCOPE_BASE_URL` (Alibaba Model
+Studio, workspace in `config/alibaba_models.json`), `GEMINI_API_KEY` (legacy embedder), `GROQ_API_KEY`,
+`CEREBRAS_API_KEY`, `XAI_API_KEY`, `ANTHROPIC_API_KEY` (legacy direct providers, off by default).
 
 **`config/`**: `build_f.json` (identity and clock — §1; `memory_budget_chars`, `recent_turns`, `idle_reflection`,
 `silence_remarks` (`normal` | `rare` | `off`: her remark on a silence after 30 s, 90 s or never, counted from the
-moment her voice stops; Setup → You & Amika), `auto_open_from_reflection`, `embedding_provider: "local"`, `embedding_url`, budgets), `llm_roles.json` (`options`,
-`presets`, `selections` for `surface` / `deep` / `reflection` / `memory_write`; Setup → Brain edits it),
-`openrouter_models.json` / `alibaba_models.json` / `pricing.json` (catalogs and prices; Ollama is priced at 0),
-`word_replace.json` (`stt_to_llm` fixes, `llm_to_tts` pronunciations incl. the wizard's `role: user_name` rule and
-the shipped chat-abbreviation rules at the end, `tts_keep_caps`: capitalised words her voice should keep spelling),
-`tools.json` (git-ignored; MCP servers, the helpers' URLs, keys and `autostart`, policies, `clerk_role`,
-`iot_disclaimer`; template `tools.example.json`; §8.1),
+moment her voice stops; Setup → You & Amika), `auto_open_from_reflection`, `embedding_provider: "local"`,
+`embedding_url`, budgets), `llm_roles.json` (`options`, `presets`, `selections` for `surface` / `deep` / `reflection`
+/ `memory_write`; Setup → Brain edits it), `openrouter_models.json` / `alibaba_models.json` / `pricing.json` (catalogs
+and prices; Ollama and custom endpoints are priced at 0), `word_replace.json` (`stt_to_llm` fixes, `llm_to_tts`
+pronunciations incl. the wizard's `role: user_name` rule and the shipped chat-abbreviation rules at the end,
+`tts_keep_caps`: capitalised words her voice should keep spelling), `tools.json` (git-ignored; MCP servers, the
+helpers' URLs, keys and `autostart`, policies, `clerk_role`, `iot_disclaimer`; template `tools.example.json`; §8.1),
 `messengers.json` (git-ignored; bot tokens and allow-lists; template `messengers.example.json`), `ollama.json`
-(git-ignored), `voice_map.json` (git-ignored; voice adapter edits).
+(git-ignored), `custom_llm.json` (git-ignored; the custom endpoints and their models, §5.4), `voice_map.json`
+(git-ignored; voice adapter edits).
 
 ## 7. The page
 
@@ -1263,8 +1323,10 @@ envs\brain\Scripts\python.exe -m pip install -r requirements-dev.txt
 envs\brain\Scripts\python.exe -B -m pytest tests -k "not live" -p no:cacheprovider -q
 ```
 
-About 680 offline tests: the output contract and both streaming parsers (parity), prompt assembly, memory, the usage
-ledger, the control proxies, Fully Local (every role, her surface turn included, on the Ollama transport), the tools
+About 760 offline tests: the output contract and both streaming parsers (parity), prompt assembly, memory, the usage
+ledger, the control proxies, Fully Local (every role, her surface turn included, on the Ollama transport), custom
+OpenAI-compatible endpoints (`tests/test_f_custom.py`: addresses, keys never echoed, discovery, the JSON modes, the
+`<think>` filter however the stream is cut, streams without usage, the routes; `tests/test_custom_proxy.py`), the tools
 clerk (with agent autostart and health), the agents bridge against in-process
 fakes of Hermes and nanoMuse (`tests/test_agents_bridge.py`: jobs, approvals, questions, stop, health with
 `no_model` and `refused`, the copied-home session fallback, the bridge's own steps marked `internal`, a real MCP

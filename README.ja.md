@@ -170,7 +170,7 @@ powershell -ExecutionPolicy Bypass -File scripts\update_once.ps1
 
 1. **STEP 1 — 彼女を止める。** `Stop_OpenAmika.bat` をダブルクリック。
 2. **STEP 2 — 新しいZIPをダウンロードして、古いフォルダーの隣に解凍。**
-3. **STEP 3 — 古いフォルダーから新しいフォルダーへ次のものをコピー**（あるものだけ）：`memory_f`、`brain\memories`、`settings.json`、`brain\.env`、`config\seed.json`、`config\ollama.json`、`config\voice_map.json`、`config\tools.json`、`config\messengers.json`。
+3. **STEP 3 — 古いフォルダーから新しいフォルダーへ次のものをコピー**（あるものだけ）：`memory_f`、`brain\memories`、`settings.json`、`brain\.env`、`config\seed.json`、`config\ollama.json`、`config\custom_llm.json`、`config\voice_map.json`、`config\tools.json`、`config\messengers.json`。
 4. **STEP 4 — 新しいフォルダーでセットアップを実行**：インストールの STEP 4 と STEP 5 を新しいフォルダーで。2回目は速くなります。
 5. **STEP 5 — 新しいフォルダーから彼女を起動。** 名前と街をもう一度聞かれることがありますが、記憶はすべて残っています。彼女があなたを覚えているのを確かめてから、古いフォルダーを消してください。
 

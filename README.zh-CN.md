@@ -170,7 +170,7 @@ powershell -ExecutionPolicy Bypass -File scripts\update_once.ps1
 
 1. **STEP 1 — 停止她。** 双击 `Stop_OpenAmika.bat`。
 2. **STEP 2 — 下载新的 ZIP，解压在旧文件夹旁边。**
-3. **STEP 3 — 把下面这些从旧文件夹复制到新文件夹**（有的才复制）：`memory_f`、`brain\memories`、`settings.json`、`brain\.env`、`config\seed.json`、`config\ollama.json`、`config\voice_map.json`、`config\tools.json`、`config\messengers.json`。
+3. **STEP 3 — 把下面这些从旧文件夹复制到新文件夹**（有的才复制）：`memory_f`、`brain\memories`、`settings.json`、`brain\.env`、`config\seed.json`、`config\ollama.json`、`config\custom_llm.json`、`config\voice_map.json`、`config\tools.json`、`config\messengers.json`。
 4. **STEP 4 — 在新文件夹里运行安装**：在新文件夹里做安装的 STEP 4 和 STEP 5。第二次会快一些。
 5. **STEP 5 — 从新文件夹启动她。** 她可能会再问一次你的名字和城市，但她的记忆都在。确认她还记得你之后，再删除旧文件夹。
 

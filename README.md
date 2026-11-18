@@ -188,8 +188,8 @@ It is the same update, with the same backup. After it, `Update_OpenAmika.bat` is
 1. **STEP 1 — Stop her.** Double-click `Stop_OpenAmika.bat`.
 2. **STEP 2 — Download and unzip the new ZIP** next to the old folder.
 3. **STEP 3 — Copy these from the old folder into the new one** (the ones you have): `memory_f`, `brain\memories`,
-   `settings.json`, `brain\.env`, `config\seed.json`, `config\ollama.json`, `config\voice_map.json`,
-   `config\tools.json`, `config\messengers.json`.
+   `settings.json`, `brain\.env`, `config\seed.json`, `config\ollama.json`, `config\custom_llm.json`,
+   `config\voice_map.json`, `config\tools.json`, `config\messengers.json`.
 4. **STEP 4 — Run the setup in the new folder**: STEP 4 and STEP 5 of the install, from the new folder. It is
    faster the second time.
 5. **STEP 5 — Start her** from the new folder. She may ask your name and city again; her memories are all there.
@@ -226,7 +226,7 @@ in your city. She runs on your own PC, with OpenRouter or fully local with Ollam
 ## Which language model?
 
 Her ears, voice, memory and eyes always run on your PC. Her language model, the part that thinks and writes her
-replies, runs one of two ways:
+replies, runs one of these ways:
 
 - **Semi-Local (recommended)**: through [OpenRouter](https://openrouter.ai) on your own key. In almost all cases
   this is the better choice: she uses the models she was tested with, answers fast, and it only costs a few dollars
@@ -236,6 +236,8 @@ replies, runs one of two ways:
   forgets what you told her and breaks her reply format (her first-run window and Setup → Brain warn you). A local
   model is also slower: all her thinking takes turns on it, so after you interrupt her, or while she saves a memory
   or reflects, a reply can take 5–50 s.
+- **Your own server**: any server that speaks the OpenAI chat API, on your network or in the cloud (LM Studio, vLLM,
+  llama.cpp, Groq, DeepSeek…). The same model-size advice applies; her cost meter does not track these calls.
 
 > **What OpenRouter is, and what it costs.** OpenRouter is one account for many AI models: with your key, she sends
 > her thinking to the models she was tested with, and OpenRouter charges their prices. It is **prepaid**: add a few
@@ -336,6 +338,9 @@ GPU memory). Attach it when you ask on [Discord](https://discord.gg/mekahime) or
 - **Fully Local**: install [Ollama](https://ollama.com), run `ollama pull gemma3:27b` (17 GB; or another model of
   27B or more, see [Which language model?](#which-language-model)), then on the Setup page choose Brain → Ollama →
   Detect models → Use this model. No key needed. For Ollama on another PC, type its address there before Detect models.
+- **Your own server**: on the Setup page choose Brain → Custom, give it a name, its address (for example
+  `http://127.0.0.1:1234/v1` for LM Studio) and a key if it needs one, Save (it reads the server's models), pick one
+  → Use this model. Give the model a context window of 16k tokens or more on the server; her prompts are about 8k.
 - **Her helpers**: Hermes Agent or nanoMuse run errands for her, and her desk view shows what they do
   ([below](#her-helpers-hermes-and-nanomuse)). Any other MCP server works too, on the Tools page
   ([docs/TOOLS.md](docs/TOOLS.md)).

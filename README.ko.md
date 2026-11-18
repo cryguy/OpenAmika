@@ -191,8 +191,8 @@ powershell -ExecutionPolicy Bypass -File scripts\update_once.ps1
 1. **1단계 — 종료.** `Stop_OpenAmika.bat`를 더블클릭하세요.
 2. **2단계 — 새 ZIP을 내려받아** 기존 폴더 옆에 압축을 푸세요.
 3. **3단계 — 기존 폴더에서 새 폴더로 다음 항목 중 있는 것을 복사하세요:** `memory_f`, `brain\memories`,
-   `settings.json`, `brain\.env`, `config\seed.json`, `config\ollama.json`, `config\voice_map.json`,
-   `config\tools.json`, `config\messengers.json`.
+   `settings.json`, `brain\.env`, `config\seed.json`, `config\ollama.json`, `config\custom_llm.json`,
+   `config\voice_map.json`, `config\tools.json`, `config\messengers.json`.
 4. **4단계 — 새 폴더에서 설치 프로그램을 실행하세요.** 설치 안내의 4단계와 5단계를 새 폴더에서 진행하면 됩니다.
    두 번째 설치는 더 빠릅니다.
 5. **5단계 — 새 폴더에서 실행하세요.** 이름과 도시를 다시 물을 수 있지만 기억은 그대로 있습니다.
