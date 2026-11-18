@@ -53,18 +53,25 @@ class LocalRolesTests(unittest.TestCase):
 
     def test_all_ollama(self):
         self._with_roles({r: f"{r}:ollama:qwen3:8b" for r in ("deep", "surface", "reflection", "memory_write")})
-        self.assertTrue(launch.roles_all_local())
+        self.assertEqual(launch.keyless_transports(), {"ollama"})
+
+    def test_ollama_and_custom_endpoints_need_no_key(self):
+        self._with_roles({"deep": "deep:custom:groq:openai/gpt-oss-120b", "surface": "surface:custom:lmstudio:qwen3-32b",
+                          "reflection": "reflection:ollama:qwen3:8b", "memory_write": "memory_write:ollama:qwen3:8b"})
+        self.assertEqual(launch.keyless_transports(), {"ollama", "custom"})
+        self.assertEqual(launch.custom_roles(), {"groq": {"openai/gpt-oss-120b": ["deep"]},
+                                                 "lmstudio": {"qwen3-32b": ["surface"]}})
 
     def test_mixed_roles_need_the_key(self):
         self._with_roles({"deep": "deep:z-ai/glm-5#no-reasoning", "surface": "surface:ollama:qwen3:8b",
-                          "reflection": "reflection:ollama:qwen3:8b", "memory_write": "memory_write:ollama:qwen3:8b"})
-        self.assertFalse(launch.roles_all_local())
+                          "reflection": "reflection:custom:lmstudio:qwen3-32b", "memory_write": "memory_write:ollama:qwen3:8b"})
+        self.assertEqual(launch.keyless_transports(), set())
 
     def test_shipped_defaults_use_openrouter(self):
         shipped = json.loads(shipped_bytes("config/llm_roles.json").decode("utf-8-sig"))
         self._with_roles(shipped.get("selections") or {})
         self.assertTrue(shipped.get("selections"))
-        self.assertFalse(launch.roles_all_local())
+        self.assertFalse(launch.keyless_transports())
 
     def test_missing_tools_json_is_not_a_problem(self):
         self._with_roles({})

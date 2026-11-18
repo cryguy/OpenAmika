@@ -190,6 +190,9 @@ def write_log(checkout, *errors):
     ("RuntimeError: Ollama answered HTTP 500: model requires more system memory (19.2 GiB) than is available (7.1 GiB)",
      'the model does not fit in memory'),
     ('ValueError: A key and both mandatory metering callbacks are required', 'the key is missing'),
+    ('[turn] OpenRouter (HTTP 401): User not found. — the key is wrong or was deleted', 'the key is missing'),
+    ('[turn] LM Studio (HTTP 401): Invalid API key',
+     "a model server refused its key (LM Studio (HTTP 401)): paste that server's key again on Setup → Brain"),
     ('SystemExit: something nobody foresaw', 'its log ends with: SystemExit: something nobody foresaw'),
 ])
 def test_the_brain_row_says_why_it_did_not_start(checkout, error, why):
@@ -222,6 +225,18 @@ def test_an_up_brain_that_cannot_answer_says_so(checkout):
     assert svc.light(0)[1] == 'warn' and 'she cannot answer' in svc.light(0)[2]
     (checkout / 'brain' / '.env').write_text(f'OPENROUTER_API_KEY={FAKE_KEY}\n', 'utf-8')
     assert launch.brain_caveat(launch.Report()) == ''
+
+
+def test_an_up_brain_whose_custom_endpoint_is_down_says_so(checkout):
+    picks = {role: f'{role}:custom:lmstudio:qwen3-32b' for role in ('surface', 'deep', 'reflection', 'memory_write')}
+    (checkout / 'config' / 'llm_roles.json').write_text(json.dumps({'selections': picks}), 'utf-8')
+    (checkout / 'config' / 'custom_llm.json').write_text(json.dumps({'endpoints': [
+        {'id': 'lmstudio', 'name': 'LM Studio', 'base_url': 'http://127.0.0.1:1234/v1', 'models': []}]}), 'utf-8')
+    assert launch.brain_caveat(launch.Report()) == ''                  # no OpenRouter key needed
+    report = launch.Report()
+    report.add('err', 'LM Studio', 'not answering at http://127.0.0.1:1234/v1 — start it, or fix its address on Setup → Brain')
+    assert launch.brain_caveat(report) == ('LM Studio: not answering at http://127.0.0.1:1234/v1 — start it, or fix its '
+                                           'address on Setup → Brain')
 
 
 def ollama_roles(checkout, size_gb, base='http://127.0.0.1:11434'):

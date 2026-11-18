@@ -39,7 +39,8 @@ def test_the_script_is_ascii_and_parses():
 def test_it_backs_up_her_memory_and_every_settings_file_before_git_runs():
     text = PS1.read_text("ascii")
     for item in ("'memory_f'", "'brain\\memories'", "'settings.json'", "'brain\\.env'", "'config\\seed.json'",
-                 "'config\\ollama.json'", "'config\\voice_map.json'", "'config\\tools.json'", "'config\\messengers.json'"):
+                 "'config\\ollama.json'", "'config\\custom_llm.json'", "'config\\voice_map.json'", "'config\\tools.json'",
+                 "'config\\messengers.json'"):
         assert item in text, item
     code = text[text.index("$root = Split-Path"):]          # after the header comment, which names the steps too
     order = [code.index(marker) for marker in ("She is running", "update-$stamp.zip", "stash push", "pull --ff-only",
@@ -51,7 +52,7 @@ def test_it_backs_up_her_memory_and_every_settings_file_before_git_runs():
 def test_her_memory_and_the_backups_are_never_committed():
     ignored = (ROOT / ".gitignore").read_text("utf-8").splitlines()
     for entry in ("memory_f/", "brain/memories/", "backups/", "settings.json", "config/seed.json", "config/ollama.json",
-                  "config/voice_map.json", "config/tools.json", "config/messengers.json"):
+                  "config/custom_llm.json", "config/voice_map.json", "config/tools.json", "config/messengers.json"):
         assert entry in ignored, entry
 
 

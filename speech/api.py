@@ -705,7 +705,7 @@ async def build_f_models():
             raise ValueError("Unexpected model choices")
         # (the field list is spelled out here: tests load this function on its own, without module constants)
         return {key: payload.get(key) for key in ("ok", "selections", "options", "presets", "benchmark", "transport",
-                                                  "ollama", "selection_fallback")}
+                                                  "ollama", "custom", "selection_fallback")}
     except HTTPException:
         raise
     except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
@@ -746,12 +746,79 @@ async def build_f_ollama_use(request: Request):
     return await _build_f_control(request, "/api/build_f/ollama/use", "ollama-use", ("ok", "selections", "transport", "in_use"))
 
 
+# ── custom endpoints: any server that speaks the OpenAI chat API (config/custom_llm.json; each key stays in brain/.env
+# and only whether one is saved, with its hint, reaches the page) ──
+_CUSTOM_FIELDS = ("ok", "endpoints", "in_use")
+_CUSTOM_ENDPOINT_FIELDS = ("id", "name", "base_url", "json_mode", "detected_at", "models", "key", "reachable", "error")
+_CUSTOM_MODEL_FIELDS = ("name", "context_length", "kind", "source")
+
+
+def _custom_status(payload):
+    """The page's copy of the brain's custom-endpoint status: each endpoint, model and key cut to their own fields."""
+    endpoints = []
+    for row in payload.get("endpoints") if isinstance(payload.get("endpoints"), list) else []:
+        if not isinstance(row, dict):
+            continue
+        item = {key: row.get(key) for key in _CUSTOM_ENDPOINT_FIELDS}
+        models = row.get("models") if isinstance(row.get("models"), list) else []
+        item["models"] = [{key: m.get(key) for key in _CUSTOM_MODEL_FIELDS} for m in models if isinstance(m, dict)]
+        key = row.get("key") if isinstance(row.get("key"), dict) else {}
+        item["key"] = {"present": key.get("present"), "hint": key.get("hint")}
+        endpoints.append(item)
+    return {"ok": payload.get("ok"), "endpoints": endpoints, "in_use": payload.get("in_use")}
+
+
+@app.get("/api/build_f/custom")
+async def build_f_custom():
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as client:
+            async with client.get(HANE_URL.rstrip("/") + "/api/build_f/custom", allow_redirects=False) as response:
+                if response.status != 200:
+                    raise HTTPException(status_code=503, detail="Custom endpoint status is unavailable.")
+                payload = await response.json()
+        if not isinstance(payload, dict) or payload.get("ok") is not True:
+            raise ValueError("Unexpected custom endpoint status")
+        return _custom_status(payload)
+    except HTTPException:
+        raise
+    except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
+        raise HTTPException(status_code=503, detail="Custom endpoint status is unavailable (is the brain running?).") from None
+
+
+@app.post("/api/build_f/custom/endpoint")
+async def build_f_custom_endpoint(request: Request):
+    """Add, change or remove an endpoint (its key goes to brain/.env; the brain refuses to remove one a role uses): like
+    an Ollama detect it touches no conversation state, so it may run while she talks."""
+    return _custom_status(await _build_f_control(request, "/api/build_f/custom/endpoint", "custom-endpoint",
+                                                 _CUSTOM_FIELDS, check_busy=False))
+
+
+@app.post("/api/build_f/custom/detect")
+async def build_f_custom_detect(request: Request):
+    """Ask an endpoint for its models and record them; touches no conversation state, so it may run while she talks."""
+    return _custom_status(await _build_f_control(request, "/api/build_f/custom/detect", "custom-detect",
+                                                 _CUSTOM_FIELDS, check_busy=False, timeout=60))
+
+
+@app.post("/api/build_f/custom/model")
+async def build_f_custom_model(request: Request):
+    """Add a model the server does not list, or remove one no role uses; touches no conversation state, so it may run
+    while she talks."""
+    return _custom_status(await _build_f_control(request, "/api/build_f/custom/model", "custom-model",
+                                                 _CUSTOM_FIELDS, check_busy=False))
+
+
+@app.post("/api/build_f/custom/use")
+async def build_f_custom_use(request: Request):
+    return await _build_f_control(request, "/api/build_f/custom/use", "custom-use", ("ok", "selections", "transport", "in_use"))
+
+
 @app.post("/api/build_f/preset")
 async def build_f_preset(request: Request):
     """Apply a tested preset by name, or the first validated preset of a provider ({"provider": "openrouter"})."""
     return await _build_f_control(request, "/api/build_f/preset", "apply-preset",
                                   ("ok", "selections", "options", "presets", "benchmark", "transport", "ollama",
-                                   "selection_fallback", "applied_preset"))
+                                   "custom", "selection_fallback", "applied_preset"))
 
 
 @app.post("/api/build_f/unlock")
@@ -858,7 +925,8 @@ async def build_f_meter_reset(request: Request):
 @app.post("/api/build_f/models")
 async def build_f_select_models(request: Request):
     return await _build_f_control(request, "/api/build_f/models", "select-models",
-                                  ("ok", "selections", "options", "presets", "benchmark", "transport", "ollama", "selection_fallback"))
+                                  ("ok", "selections", "options", "presets", "benchmark", "transport", "ollama", "custom",
+                                   "selection_fallback"))
 
 
 # everything the Tools page renders: jobs/relay_queue (agent delegations), clerk_role, "config" (the raw

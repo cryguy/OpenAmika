@@ -4,8 +4,8 @@
 #      stop her first (Stop_OpenAmika.bat, or Ctrl+C in her window).
 #   2. Backs up her memory and your settings into backups\update-<yyyyMMdd-HHmm>.zip:
 #        memory_f\, brain\memories\, settings.json, brain\.env, config\seed.json, config\ollama.json,
-#        config\voice_map.json, config\tools.json, config\messengers.json, and the tracked files the pages change
-#        (config\build_f.json, config\word_replace.json, config\llm_roles.json, brain\*.txt, brain\scenes.json).
+#        config\custom_llm.json, config\voice_map.json, config\tools.json, config\messengers.json, and the tracked
+#        files the pages change (config\build_f.json, config\word_replace.json, config\llm_roles.json, brain\*.txt, brain\scenes.json).
 #   3. git stash, git pull --ff-only, git stash pop. Her memory and your settings are git-ignored, so the pull never
 #      touches them. A file you edited that the update changed too (her persona, most often) keeps your version; the
 #      update's version of a persona file is in brain\defaults\.
@@ -57,8 +57,8 @@ $stamp = Get-Date -Format 'yyyyMMdd-HHmm'
 $backupDir = Join-Path $root 'backups'
 $zipPath = Join-Path $backupDir "update-$stamp.zip"
 $items = @('memory_f', 'brain\memories', 'settings.json', 'brain\.env', 'config\seed.json', 'config\ollama.json',
-           'config\voice_map.json', 'config\tools.json', 'config\messengers.json', 'config\build_f.json',
-           'config\word_replace.json', 'config\llm_roles.json', 'brain\scenes.json')
+           'config\custom_llm.json', 'config\voice_map.json', 'config\tools.json', 'config\messengers.json',
+           'config\build_f.json', 'config\word_replace.json', 'config\llm_roles.json', 'brain\scenes.json')
 $files = New-Object System.Collections.Generic.List[string]
 foreach ($rel in $items) {
     $full = Join-Path $root $rel
@@ -102,7 +102,8 @@ if (-not $isClone) {
     Say 'Her memory is safe in the backup above. To update a ZIP folder (README.md, "Updating her", the ZIP path):'
     Say '  1. Download and unzip the new ZIP next to this folder.'
     Say '  2. Copy these from this folder into the new one: memory_f, brain\memories, settings.json, brain\.env,'
-    Say '     config\seed.json, config\ollama.json, config\voice_map.json, config\tools.json, config\messengers.json'
+    Say '     config\seed.json, config\ollama.json, config\custom_llm.json, config\voice_map.json, config\tools.json,'
+    Say '     config\messengers.json'
     Say '  3. In the new folder, run the two setup lines again, then Start_OpenAmika.bat.'
     exit 2
 }

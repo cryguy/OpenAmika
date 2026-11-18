@@ -49,16 +49,19 @@ def fresh(tmp_path, monkeypatch):
 
 @contextlib.contextmanager
 def serve(port, routes):
-    """A stand-in on 127.0.0.1:port answering GET <path> with routes[path] (a dict as JSON, a str as text)."""
+    """A stand-in on 127.0.0.1:port answering GET <path> with routes[path] (a dict as JSON, a str as text, or a
+    function of the request's headers returning (status, dict or str))."""
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802
-            body = routes.get(self.path)
+            body, status = routes.get(self.path), 200
+            if callable(body):
+                status, body = body(self.headers)
             if body is None:
                 self.send_response(404)
                 self.end_headers()
                 return
             data = (json.dumps(body) if isinstance(body, dict) else body).encode("utf-8")
-            self.send_response(200)
+            self.send_response(status)
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -203,7 +206,8 @@ def test_her_roles_on_ollama_need_it_running_with_their_models_pulled(fresh, mon
         return checks(launch.preflight(cfg, None, None, None, None, services, agents, [], held_iot=held))
 
     got = run()
-    assert got["API keys"][0] == "ok"                                     # no key needed ...
+    assert got["API keys"] == ("ok", "no OpenRouter key, none needed: every role runs on Ollama "
+                                     "(Setup → Brain)")                     # no key needed ...
     assert got["Ollama"][0] == "err" and f"not answering at {base} — start Ollama" in got["Ollama"][1]   # ... but Ollama
     with serve(port, {"/api/version": {"version": "0.12.6"}, "/api/tags": {"models": [{"name": "gemma3:27b"}]}}):
         got = run()
@@ -216,6 +220,122 @@ def test_no_ollama_rows_while_her_roles_run_on_openrouter(fresh):
     cfg, (services, held, agents) = services_for(example_cfg(fresh), fresh / "vendor" / "tts-engine")
     got = checks(launch.preflight(cfg, None, None, None, None, services, agents, [], held_iot=held))
     assert not [name for name in got if name.startswith("Ollama")]
+
+
+def custom_setup(fresh, monkeypatch, picks, endpoints, env=""):
+    """A checkout whose roles run on custom endpoints (config/custom_llm.json, keys in brain/.env); returns run()."""
+    monkeypatch.setattr(launch, "ROOT", fresh)
+    (fresh / "config").mkdir()
+    (fresh / "config" / "llm_roles.json").write_text(json.dumps({"selections": picks}), "utf-8")
+    (fresh / "config" / "custom_llm.json").write_text(json.dumps({"endpoints": endpoints}), "utf-8")
+    (fresh / "brain").mkdir()
+    (fresh / "brain" / ".env").write_text(env, "utf-8")
+    cfg, (services, held, agents) = services_for(example_cfg(fresh), fresh / "vendor" / "tts-engine")
+    return lambda: checks(launch.preflight(cfg, None, None, None, None, services, agents, [], held_iot=held))
+
+
+def endpoint(endpoint_id, name, port):
+    return {"id": endpoint_id, "name": name, "base_url": f"http://127.0.0.1:{port}/v1", "json_mode": "json_object",
+            "models": [], "detected_at": None}
+
+
+def test_her_roles_on_a_custom_endpoint_need_no_openrouter_key_but_its_server_up(fresh, monkeypatch):
+    port = free_port()
+    base = f"http://127.0.0.1:{port}/v1"
+    picks = {role: f"{role}:custom:lm-studio:qwen/qwen3:32b" for role in ("surface", "deep", "reflection")}
+    picks["memory_write"] = "memory_write:custom:lm-studio:gemma-3-12b"
+    run = custom_setup(fresh, monkeypatch, picks, [endpoint("lm-studio", "LM Studio", port)])
+    got = run()
+    assert got["API keys"] == ("ok", "no OpenRouter key, none needed: every role runs on your own endpoints "
+                                     "(Setup → Brain)")
+    assert got["LM Studio"] == ("err", f"not answering at {base} — start it, or fix its address on Setup → Brain; "
+                                       "deep, memory_write, reflection, surface run on it")
+    with serve(port, {"/models": {"data": []}}):                          # an address without its /v1
+        got = run()
+    assert got["LM Studio"] == ("warn", f"answers at {base}, but GET /models gave no model list (HTTP 404) — check "
+                                        "its address on Setup → Brain")
+    assert "LM Studio model gemma-3-12b" not in got
+    listing = {"object": "list", "data": [{"id": "qwen/qwen3:32b"}, {"id": "text-embedding-nomic"}]}
+    with serve(port, {"/v1/models": listing}):
+        got = run()
+    assert got["LM Studio"] == ("ok", f"2 models at {base}")
+    assert got["LM Studio model qwen/qwen3:32b"] == ("ok", "listed · surface, deep, reflection")
+    level, detail = got["LM Studio model gemma-3-12b"]
+    assert level == "warn" and detail.startswith("not listed by the server") and "(memory_write runs on it)" in detail
+    assert not [name for name in got if name.startswith("Ollama")]
+
+
+def test_a_cloud_role_next_to_a_custom_endpoint_still_needs_the_openrouter_key(fresh, monkeypatch):
+    picks = {"surface": "surface:custom:lmstudio:qwen3-32b", "deep": "deep:z-ai/glm-5#no-reasoning",
+             "reflection": "reflection:custom:lmstudio:qwen3-32b", "memory_write": "memory_write:ollama:qwen3:8b"}
+    run = custom_setup(fresh, monkeypatch, picks, [endpoint("lmstudio", "LM Studio", free_port())])
+    got = run()
+    assert got["API keys"][0] == "warn" and "wizard" in got["API keys"][1]
+
+
+def test_a_custom_endpoint_key_is_sent_only_as_its_bearer_and_never_shown(fresh, monkeypatch):
+    port, key = free_port(), "gsk_" + "k" * 40
+    picks = {role: f"{role}:custom:groq:openai/gpt-oss-120b" for role in ("surface", "deep", "reflection", "memory_write")}
+    run = custom_setup(fresh, monkeypatch, picks, [endpoint("groq", "Groq", port)], env=f"CUSTOM_LLM_KEY_GROQ={key}\n")
+    seen = []
+
+    def models(headers):
+        seen.append(headers.get("Authorization"))
+        return (200, {"data": [{"id": "openai/gpt-oss-120b"}]}) if headers.get("Authorization") == f"Bearer {key}" \
+            else (401, {"error": {"message": "Invalid API Key"}})
+    with serve(port, {"/v1/models": models}):
+        right = run()
+        (fresh / "brain" / ".env").write_text("CUSTOM_LLM_KEY_GROQ=gsk_wrong_wrong_wrong\n", "utf-8")
+        wrong = run()
+        (fresh / "brain" / ".env").write_text("", "utf-8")
+        none = run()
+    assert right["Groq"] == ("ok", f"1 model at http://127.0.0.1:{port}/v1")
+    assert right["Groq model openai/gpt-oss-120b"] == ("ok", "listed · surface, deep, reflection, memory_write")
+    assert wrong["Groq"] == ("err", "refused the key — paste it again on Setup → Brain; "
+                                    "deep, memory_write, reflection, surface run on it")
+    assert none["Groq"][0] == "err" and none["Groq"][1].startswith("asks for a key — paste it on Setup → Brain")
+    assert seen == [f"Bearer {key}", "Bearer gsk_wrong_wrong_wrong", None]
+    assert "gsk_" not in json.dumps([right, wrong, none])
+
+
+def test_a_custom_endpoint_key_never_follows_a_redirect(fresh, monkeypatch):
+    port, elsewhere, key = free_port(), free_port(), "sk-" + "r" * 40
+    picks = {role: f"{role}:custom:proxy:llama-3.3-70b" for role in ("surface", "deep", "reflection", "memory_write")}
+    run = custom_setup(fresh, monkeypatch, picks, [endpoint("proxy", "My proxy", port)], env=f"CUSTOM_LLM_KEY_PROXY={key}\n")
+    leaked = []
+
+    def models(headers):
+        leaked.append(headers.get("Authorization"))
+        return 200, {"data": []}
+
+    class Redirect(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            self.send_response(302)
+            self.send_header("Location", f"http://127.0.0.1:{elsewhere}/v1/models")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *args):
+            pass
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", port), Redirect)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        with serve(elsewhere, {"/v1/models": models}):
+            got = run()
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert got["My proxy"][0] == "err" and "redirects elsewhere (HTTP 302)" in got["My proxy"][1]
+    assert leaked == []
+
+
+def test_a_role_on_an_endpoint_missing_from_the_custom_list_is_a_problem(fresh, monkeypatch):
+    picks = {role: f"{role}:custom:vllm-box:qwen3-32b" for role in ("surface", "deep", "reflection", "memory_write")}
+    run = custom_setup(fresh, monkeypatch, picks, [endpoint("lmstudio", "LM Studio", free_port())])
+    got = run()
+    level, detail = got["vllm-box"]
+    assert level == "err" and detail.startswith("not in config/custom_llm.json — add it again")
+    assert "LM Studio" not in got                                         # an endpoint no role uses is not checked
 
 
 def test_a_voice_server_without_her_voice_on_her_port_is_a_problem(fresh):

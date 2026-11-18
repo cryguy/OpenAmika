@@ -60,7 +60,7 @@ from datetime import datetime
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPHandler, HTTPSHandler, OpenerDirector, Request, UnknownHandler, urlopen
 
 ROOT = Path(__file__).resolve().parent
 APP = 'OpenAmika'
@@ -329,6 +329,23 @@ def http_json(url, timeout=2):
         return {'_text': body.decode('utf-8', 'replace')}
 
 
+def http_get_status(url, headers, timeout=5):
+    """(status, JSON payload or None) of a GET over http(s) that follows no redirect, so a key in headers never
+    reaches another address; status 0 when nothing answered."""
+    opener = OpenerDirector()
+    for handler in (HTTPHandler(), HTTPSHandler(), UnknownHandler()):
+        opener.add_handler(handler)
+    try:
+        with opener.open(Request(url, headers=headers), timeout=timeout) as response:
+            status, body = response.status, response.read()
+    except Exception:
+        return 0, None
+    try:
+        return status, json.loads(body)
+    except ValueError:
+        return status, None
+
+
 def resolve(path):
     path = Path(str(path))
     return path if path.is_absolute() else ROOT / path
@@ -470,14 +487,16 @@ def launcher_target(command):
     return ''
 
 
-def roles_all_local():
-    """True when every LLM role selected in config/llm_roles.json runs on Ollama (no cloud key needed)."""
+def keyless_transports():
+    """{'ollama'}, {'custom'} or both when every LLM role selected in config/llm_roles.json runs on Ollama or on a
+    custom endpoint (no OpenRouter key needed); else an empty set."""
     try:
         doc = json.loads((ROOT / 'config' / 'llm_roles.json').read_text('utf-8-sig'))
         picks = list((doc.get('selections') or {}).values())
     except Exception:
-        return False
-    return bool(picks) and all(isinstance(k, str) and ':ollama:' in k for k in picks)
+        return set()
+    kinds = {k.split(':', 2)[1] if isinstance(k, str) and k.count(':') >= 2 else '' for k in picks}
+    return kinds if picks and kinds <= {'ollama', 'custom'} else set()
 
 
 OLLAMA_DEFAULT = 'http://127.0.0.1:11434'
@@ -528,6 +547,88 @@ def ollama_checks():
         else:
             out.append(('err', f'Ollama model {model}', f'not pulled — ollama pull {model} ({", ".join(roles)} '
                                                        f'run{"s" if len(roles) == 1 else ""} on it)'))
+    return out
+
+
+def custom_roles():
+    """{endpoint id: {model: [roles]}} for the LLM roles that run on a custom endpoint: config/llm_roles.json selections
+    "<role>:custom:<endpoint id>:<model>" (a model name may hold ':' and '/')."""
+    try:
+        picks = json.loads((ROOT / 'config' / 'llm_roles.json').read_text('utf-8-sig')).get('selections') or {}
+    except Exception:
+        return {}
+    out = {}
+    for role, key in picks.items() if isinstance(picks, dict) else ():
+        parts = key.split(':', 3) if isinstance(key, str) else []
+        if len(parts) == 4 and parts[1] == 'custom' and parts[2] and parts[3]:
+            out.setdefault(parts[2], {}).setdefault(parts[3], []).append(str(role))
+    return out
+
+
+def custom_endpoints():
+    """{id: endpoint} from config/custom_llm.json (Setup → Brain → Custom); {} when it cannot be read."""
+    try:
+        rows = json.loads((ROOT / 'config' / 'custom_llm.json').read_text('utf-8-sig')).get('endpoints') or []
+    except Exception:
+        return {}
+    return {str(r['id']): r for r in rows if isinstance(r, dict) and r.get('id')} if isinstance(rows, list) else {}
+
+
+def custom_label(endpoint_id, endpoints):
+    """The name an endpoint's pre-flight row carries: its name on Setup → Brain, else its id."""
+    return str((endpoints.get(endpoint_id) or {}).get('name') or endpoint_id)
+
+
+def custom_checks():
+    """[(level, name, detail)] when a role runs on a custom endpoint: per endpoint in use, its server answers
+    GET <base_url>/models (with its key from brain/.env, when one is set), and every model in use is listed there.
+    Some servers serve more models than they list, so a model missing from the list is a warning. Nothing when no
+    role uses a custom endpoint."""
+    in_use = custom_roles()
+    if not in_use:
+        return []
+    endpoints = custom_endpoints()
+    env = read_env(ROOT / 'brain' / '.env')
+    out = []
+    for endpoint_id, models in in_use.items():
+        label = custom_label(endpoint_id, endpoints)
+        roles = sorted({r for rs in models.values() for r in rs})
+        runs = f'{", ".join(roles)} run{"s" if len(roles) == 1 else ""} on it'
+        endpoint = endpoints.get(endpoint_id)
+        if endpoint is None:
+            out.append(('err', label, f'not in config/custom_llm.json — add it again (or pick other models) on '
+                                      f'Setup → Brain; {runs}'))
+            continue
+        base = str(endpoint.get('base_url') or '').rstrip('/')
+        key = env.get('CUSTOM_LLM_KEY_' + endpoint_id.upper().replace('-', '_'), '')
+        status, listing = http_get_status(base + '/models', {'Authorization': f'Bearer {key}'} if key else {})
+        if status == 0:
+            out.append(('err', label, f'not answering at {base} — start it, or fix its address on Setup → Brain; '
+                                      f'{runs}'))
+            continue
+        if status in (401, 403):
+            out.append(('err', label, ('refused the key — paste it again on Setup → Brain' if key else
+                                       'asks for a key — paste it on Setup → Brain') + f'; {runs}'))
+            continue
+        if 300 <= status < 400:
+            out.append(('err', label, f'{base} redirects elsewhere (HTTP {status}) and she follows no redirect — put '
+                                      f'the address it redirects to on Setup → Brain; {runs}'))
+            continue
+        rows = listing.get('data') if status == 200 and isinstance(listing, dict) else None
+        if not isinstance(rows, list):
+            out.append(('warn', label, f'answers at {base}, but GET /models gave no model list (HTTP {status}) — '
+                                       'check its address on Setup → Brain'))
+            continue
+        listed = {str(m['id']) for m in rows if isinstance(m, dict) and m.get('id')}
+        out.append(('ok', label, f'{len(listed)} model{"" if len(listed) == 1 else "s"} at {base}'))
+        for model, model_roles in models.items():
+            if model in listed:
+                out.append(('ok', f'{label} model {model}', f'listed · {", ".join(model_roles)}'))
+            else:
+                out.append(('warn', f'{label} model {model}', 'not listed by the server — some serve more than they '
+                                                              'list; if she does not answer, pick a listed one on '
+                                                              f'Setup → Brain ({", ".join(model_roles)} '
+                                                              f'run{"s" if len(model_roles) == 1 else ""} on it)'))
     return out
 
 
@@ -1360,7 +1461,7 @@ def preflight(cfg, emb, vis, tools, tools_error, services, agents, procs, deep=F
             continue
         report.add('ok' if Path(python).is_file() else 'err', label, python if Path(python).is_file() else
                    f'missing: {python} — run {SETUP_CORE} (or fix the path in settings.json)')
-    local_only = roles_all_local()
+    keyless = keyless_transports()
     needed = ['speech/models/model.pt', 'config/word_replace.json'] + (['brain/embed_server.py'] if emb else [])
     hints = {'speech/models/model.pt': f'speech recognition model (SenseVoiceSmall, ~940 MB): run {SETUP_CORE}'}
     missing = [p for p in needed if not (ROOT / p).is_file()]
@@ -1371,14 +1472,15 @@ def preflight(cfg, emb, vis, tools, tools_error, services, agents, procs, deep=F
     if key and not key.startswith('sk-or-v1-your'):
         others = [k for k in ('DASHSCOPE_API_KEY', 'GEMINI_API_KEY', 'GROQ_API_KEY', 'CEREBRAS_API_KEY', 'ANTHROPIC_API_KEY') if env.get(k)]
         report.add('ok', 'API keys', f'OpenRouter key set (…{key[-4:]})' + (f'; also {", ".join(others)}' if others else ''))
-    elif local_only:
-        report.add('ok', 'API keys', 'no OpenRouter key, none needed: every role runs on Ollama (Setup → Brain)')
+    elif keyless:
+        on = ' or '.join(name for kind, name in (('ollama', 'Ollama'), ('custom', 'your own endpoints')) if kind in keyless)
+        report.add('ok', 'API keys', f'no OpenRouter key, none needed: every role runs on {on} (Setup → Brain)')
     else:
         report.add('warn', 'API keys', 'no OpenRouter key yet — paste it in the first-run wizard on the Use page (or put '
                                        'it after OPENROUTER_API_KEY= in brain/.env); until then she cannot answer. '
                                        'Fully local needs a model of 27B or more: switch the roles to Ollama on '
                                        'Setup → Brain')
-    for level, name, detail in ollama_checks():
+    for level, name, detail in ollama_checks() + custom_checks():
         report.add(level, name, detail)
     fit_check = model_fit_check(vis is not None)
     if fit_check:
@@ -1709,8 +1811,10 @@ START_FAILURES = (
                 r'|not enough memory', re.I),
      'the model does not fit in memory: {match} — use OpenRouter (Setup → Brain), close other programs that use '
      'the graphics card, or turn her eyes off ("vision": {{"enabled": false}} in settings.json)'),
-    (re.compile(r'A key and both mandatory metering callbacks are required|OPENROUTER_API_KEY|HTTP 401', re.I),
+    (re.compile(r'A key and both mandatory metering callbacks are required|OPENROUTER_API_KEY|OpenRouter \(HTTP 401\)', re.I),
      'the key is missing or refused: paste your OpenRouter key (first-run wizard, or Setup → Brain)'),
+    (re.compile(r'[\w.\-][\w .\-]{0,40} \(HTTP 401\)'),
+     'a model server refused its key ({match}): paste that server\'s key again on Setup → Brain'),
 )
 
 
@@ -1749,15 +1853,19 @@ def start_failure(svc, report=None):
 
 def brain_caveat(report=None):
     """What keeps a running brain from answering: no OpenRouter key for a cloud role, Ollama down or a model not
-    pulled, a local model that does not fit ('' when nothing). The key is read again each time (the wizard saves it
-    while the launcher runs)."""
-    if not roles_all_local():
+    pulled, a custom endpoint down, missing or refusing its key, a local model that does not fit ('' when nothing).
+    The key is read again each time (the wizard saves it while the launcher runs)."""
+    if not keyless_transports():
         key = read_env(ROOT / 'brain' / '.env').get('OPENROUTER_API_KEY', '')
         if not key or key.startswith('sk-or-v1-your'):
             return 'the key is missing: paste your OpenRouter key (first-run wizard, or Setup → Brain)'
+    endpoints = custom_endpoints()
+    custom = {custom_label(endpoint_id, endpoints) for endpoint_id in custom_roles()}
     for check in (report.checks if report is not None else []):
         if (check['name'] == 'Ollama' or check['name'].startswith('Ollama model')) and check['level'] == 'err':
             return check['detail']
+        if check['name'] in custom and check['level'] == 'err':
+            return f"{check['name']}: {check['detail']}"
         if check['name'] == 'local model fit' and check['level'] != 'ok':
             return 'the model does not fit: ' + check['detail']
     return ''
